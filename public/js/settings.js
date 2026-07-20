@@ -1742,6 +1742,13 @@ function initializeFormHandlers() {
     let openRouterMessageListenerRegistered = false;
 
     openRouterConnectBtn.addEventListener('click', async () => {
+      // OpenRouter registers/updates an "app" record keyed by callback_url
+      // on every /auth visit; firing two requests for the same callback_url
+      // in quick succession (e.g. a double click) can race on that record
+      // and returns a 409 from OpenRouter. Guard against that here.
+      if (openRouterConnectBtn.disabled) return;
+      setButtonLoading(openRouterConnectBtn, true, 'Connecting...');
+
       const verifierBytes = crypto.getRandomValues(new Uint8Array(64));
       const verifier = base64UrlEncode(verifierBytes);
 
@@ -1780,6 +1787,7 @@ function initializeFormHandlers() {
       );
 
       if (!popup) {
+        setButtonLoading(openRouterConnectBtn, false);
         await Swal.fire({
           icon: 'error',
           title: 'Popup blocked',
@@ -1787,6 +1795,8 @@ function initializeFormHandlers() {
         });
         return;
       }
+
+      setButtonLoading(openRouterConnectBtn, false);
 
       if (openRouterMessageListenerRegistered) return;
       openRouterMessageListenerRegistered = true;

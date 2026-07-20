@@ -730,12 +730,21 @@ class SetupWizard {
     }
 
     async connectOpenRouter() {
+        // OpenRouter registers/updates an "app" record keyed by callback_url
+        // on every /auth visit; firing two requests for the same callback_url
+        // in quick succession (e.g. a double click) can race on that record
+        // and returns a 409 from OpenRouter. Guard against that here.
+        if (this.openRouterConnectBtn.disabled) return;
+        this.setButtonLoading(this.openRouterConnectBtn, true, 'Connecting...');
+
         const { verifier, challenge, method } = await this.buildOpenRouterPkce();
         sessionStorage.setItem('openrouterOauth', JSON.stringify({ verifier, method }));
 
         const callbackUrl = `${window.location.origin}/openrouter/callback`;
         const authUrl = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callbackUrl)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=${method}`;
         const popup = window.open(authUrl, 'openrouter-oauth', 'width=600,height=750');
+
+        this.setButtonLoading(this.openRouterConnectBtn, false);
 
         if (!popup) {
             await this.showPopup({ icon: 'warning', title: 'Popup blocked', text: 'Please allow popups for this site and try again.' });
