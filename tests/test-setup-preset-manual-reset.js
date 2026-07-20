@@ -18,7 +18,7 @@ function createMockClassList() {
       classes.delete(item);
       return false;
     },
-    contains: (item) => classes.has(item),
+    contains: (item) => classes.has(item)
   };
 }
 
@@ -48,7 +48,7 @@ function createMockElement(id) {
     focus: () => {},
     select: () => {},
     setAttribute: () => {},
-    removeAttribute: () => {},
+    removeAttribute: () => {}
   };
 }
 
@@ -135,7 +135,7 @@ const elementIds = [
   'copyEnvPreviewBtn',
   'finalizeSetupBtn',
   'prevStepBtn',
-  'nextStepBtn',
+  'nextStepBtn'
 ];
 
 const elements = new Map(elementIds.map((id) => [id, createMockElement(id)]));
@@ -144,13 +144,13 @@ const steps = Array.from({ length: 7 }, (_unused, index) => ({
   dataset: { stepTitle: `Step ${index + 1}` },
   classList: createMockClassList(),
   style: {},
-  disabled: false,
+  disabled: false
 }));
 
 global.window = {
   __SETUP_BOOTSTRAP__: { config: {}, defaults: {}, aiProviderPresets: [] },
   fetch: async () => ({}),
-  addEventListener: () => {},
+  addEventListener: () => {}
 };
 
 global.document = {
@@ -163,19 +163,19 @@ global.document = {
     return null;
   },
   getElementById: (id) => elements.get(id) || null,
-  createElement: (tagName) => createMockElement(tagName),
+  createElement: (tagName) => createMockElement(tagName)
 };
 
 global.Swal = {
   fire: async () => ({ isConfirmed: false }),
   update: () => {},
-  close: () => {},
+  close: () => {}
 };
 
 global.navigator = {
   clipboard: {
-    writeText: async () => {},
-  },
+    writeText: async () => {}
+  }
 };
 
 global.Headers = class Headers {};
@@ -189,11 +189,7 @@ const wizard = window.setupWizard;
 assert.ok(wizard, 'Setup wizard should initialize');
 
 // Manual mode from a clean start already yields 'custom'
-assert.strictEqual(
-  wizard.aiProvider.value,
-  'custom',
-  'Fresh manual mode should default aiProvider to custom'
-);
+assert.strictEqual(wizard.aiProvider.value, 'custom', 'Fresh manual mode should default aiProvider to custom');
 
 // Selecting a named preset (e.g. OpenAI) sets the hidden aiProvider field
 const openAiPreset = {
@@ -202,14 +198,10 @@ const openAiPreset = {
   provider: 'openai',
   apiUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
-  tokenPlaceholder: 'sk-...',
+  tokenPlaceholder: 'sk-...'
 };
 wizard.applyPreset(openAiPreset);
-assert.strictEqual(
-  wizard.aiProvider.value,
-  'openai',
-  'Selecting the OpenAI preset should set aiProvider to openai'
-);
+assert.strictEqual(wizard.aiProvider.value, 'openai', 'Selecting the OpenAI preset should set aiProvider to openai');
 assert.strictEqual(wizard.aiApiUrl.value, 'https://api.openai.com/v1');
 
 // Switching back to "Manual custom configuration" (preset === null) must reset aiProvider
