@@ -1739,7 +1739,88 @@ function initializeFormHandlers() {
   };
 
   if (openRouterConnectBtn) {
-    let openRouterMessageListenerRegistered = false;
+    const handleOpenRouterCode = async (code) => {
+      const stored = sessionStorage.getItem('openrouterOauth');
+      sessionStorage.removeItem('openrouterOauth');
+      if (!stored) {
+        await Swal.fire({
+          icon: 'error',
+          title: 'OpenRouter connection failed',
+          text: 'The OAuth session expired. Please try connecting again.',
+        });
+        return;
+      }
+
+      const { verifier: storedVerifier, method: storedMethod } =
+        JSON.parse(stored);
+
+      try {
+        const response = await fetch(
+          '/api/settings/openrouter/oauth/exchange',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              code,
+              codeVerifier: storedVerifier,
+              codeChallengeMethod: storedMethod,
+            }),
+          }
+        );
+
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+          throw new Error(
+            result.error || result.message || 'OpenRouter connection failed'
+          );
+        }
+
+        if (ocrApiKeyInput) {
+          ocrApiKeyInput.value = result.data.key;
+        }
+        if (ocrProviderSelect) {
+          ocrProviderSelect.value = 'openrouter';
+        }
+        toggleOcrFields();
+        setOcrTestPill('default', 'Not tested');
+
+        await Swal.fire({
+          icon: 'success',
+          title: 'OpenRouter connected',
+          text: 'Key created — remember to save settings to persist it.',
+        });
+      } catch (error) {
+        await Swal.fire({
+          icon: 'error',
+          title: 'OpenRouter connection failed',
+          text: error.message || 'Could not exchange OpenRouter OAuth code.',
+        });
+      }
+    };
+
+    // Two independent hand-off channels for the authorization code: postMessage
+    // relies on window.opener, which OpenRouter's own Cross-Origin-Opener-Policy
+    // header can permanently sever once the popup navigates there; the
+    // storage event does not depend on window.opener at all, so it is the
+    // reliable path. Both are registered once, up front, not per click.
+    window.addEventListener('message', (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'openrouter-oauth-code') return;
+      handleOpenRouterCode(event.data.code);
+    });
+
+    window.addEventListener('storage', (event) => {
+      if (event.key !== 'openrouterOauthCode' || !event.newValue) return;
+      localStorage.removeItem('openrouterOauthCode');
+      try {
+        const { code } = JSON.parse(event.newValue);
+        if (code) handleOpenRouterCode(code);
+      } catch {
+        // Ignore malformed value.
+      }
+    });
 
     openRouterConnectBtn.addEventListener('click', async () => {
       // OpenRouter registers/updates an "app" record keyed by callback_url
@@ -1818,73 +1899,6 @@ function initializeFormHandlers() {
       }
 
       setButtonLoading(openRouterConnectBtn, false);
-
-      if (openRouterMessageListenerRegistered) return;
-      openRouterMessageListenerRegistered = true;
-
-      window.addEventListener('message', async (event) => {
-        if (event.origin !== window.location.origin) return;
-        if (event.data?.type !== 'openrouter-oauth-code') return;
-
-        const stored = sessionStorage.getItem('openrouterOauth');
-        sessionStorage.removeItem('openrouterOauth');
-        if (!stored) {
-          await Swal.fire({
-            icon: 'error',
-            title: 'OpenRouter connection failed',
-            text: 'The OAuth session expired. Please try connecting again.',
-          });
-          return;
-        }
-
-        const { verifier: storedVerifier, method: storedMethod } =
-          JSON.parse(stored);
-
-        try {
-          const response = await fetch(
-            '/api/settings/openrouter/oauth/exchange',
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                code: event.data.code,
-                codeVerifier: storedVerifier,
-                codeChallengeMethod: storedMethod,
-              }),
-            }
-          );
-
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok || !result.success) {
-            throw new Error(
-              result.error || result.message || 'OpenRouter connection failed'
-            );
-          }
-
-          if (ocrApiKeyInput) {
-            ocrApiKeyInput.value = result.data.key;
-          }
-          if (ocrProviderSelect) {
-            ocrProviderSelect.value = 'openrouter';
-          }
-          toggleOcrFields();
-          setOcrTestPill('default', 'Not tested');
-
-          await Swal.fire({
-            icon: 'success',
-            title: 'OpenRouter connected',
-            text: 'Key created — remember to save settings to persist it.',
-          });
-        } catch (error) {
-          await Swal.fire({
-            icon: 'error',
-            title: 'OpenRouter connection failed',
-            text: error.message || 'Could not exchange OpenRouter OAuth code.',
-          });
-        }
-      });
     });
   }
 

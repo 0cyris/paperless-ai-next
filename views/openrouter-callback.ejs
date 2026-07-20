@@ -51,13 +51,6 @@
             var messageEl = document.getElementById('callbackMessage');
             var spinnerEl = document.getElementById('callbackSpinner');
 
-            if (!window.opener) {
-                spinnerEl.style.display = 'none';
-                titleEl.textContent = 'Sign-in complete';
-                messageEl.textContent = 'Please return to the Paperless-AI next tab to continue.';
-                return;
-            }
-
             if (!code) {
                 spinnerEl.style.display = 'none';
                 titleEl.textContent = 'Sign-in failed';
@@ -65,11 +58,37 @@
                 return;
             }
 
-            window.opener.postMessage(
-                { type: 'openrouter-oauth-code', code: code },
-                window.location.origin
-            );
+            // Hand the code back via localStorage + the "storage" event rather
+            // than (only) window.opener.postMessage: OpenRouter's own page sets
+            // a Cross-Origin-Opener-Policy header, which severs window.opener
+            // once this popup navigates there — permanently, even after it
+            // redirects back to our own origin. localStorage/storage events are
+            // unaffected by COOP since they don't depend on the opener link.
+            try {
+                localStorage.setItem(
+                    'openrouterOauthCode',
+                    JSON.stringify({ code: code, ts: Date.now() })
+                );
+            } catch (storageError) {
+                // Ignore — the postMessage fallback below still gets a chance.
+            }
+
+            if (window.opener) {
+                try {
+                    window.opener.postMessage(
+                        { type: 'openrouter-oauth-code', code: code },
+                        window.location.origin
+                    );
+                } catch (postMessageError) {
+                    // Ignore — localStorage already carries the code.
+                }
+            }
+
             window.close();
+
+            spinnerEl.style.display = 'none';
+            titleEl.textContent = 'Sign-in complete';
+            messageEl.textContent = 'You can close this window and return to the Paperless-AI next tab.';
         })();
     </script>
 </body>

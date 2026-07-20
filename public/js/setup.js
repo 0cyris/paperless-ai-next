@@ -391,6 +391,7 @@ class SetupWizard {
             this.openRouterConnectBtn.addEventListener('click', () => this.connectOpenRouter());
         }
         window.addEventListener('message', (event) => this.handleOpenRouterOauthMessage(event));
+        window.addEventListener('storage', (event) => this.handleOpenRouterOauthStorage(event));
 
         this.copyEnvPreviewBtn.addEventListener('click', () => this.copyEnvPreview());
         this.finalizeSetupBtn.addEventListener('click', () => this.finalizeSetup());
@@ -769,11 +770,33 @@ class SetupWizard {
         }
     }
 
+    // Two independent hand-off channels for the authorization code: postMessage
+    // relies on window.opener, which OpenRouter's own Cross-Origin-Opener-Policy
+    // header can permanently sever once the popup navigates there; the storage
+    // event does not depend on window.opener at all, so it is the reliable path.
     async handleOpenRouterOauthMessage(event) {
         if (event.origin !== window.location.origin || event.data?.type !== 'openrouter-oauth-code') {
             return;
         }
+        await this.handleOpenRouterOauthCode(event.data.code);
+    }
 
+    async handleOpenRouterOauthStorage(event) {
+        if (event.key !== 'openrouterOauthCode' || !event.newValue) {
+            return;
+        }
+        localStorage.removeItem('openrouterOauthCode');
+        try {
+            const { code } = JSON.parse(event.newValue);
+            if (code) {
+                await this.handleOpenRouterOauthCode(code);
+            }
+        } catch {
+            // Ignore malformed value.
+        }
+    }
+
+    async handleOpenRouterOauthCode(code) {
         const stored = sessionStorage.getItem('openrouterOauth');
         sessionStorage.removeItem('openrouterOauth');
 
@@ -786,7 +809,7 @@ class SetupWizard {
 
         try {
             const result = await this.request('/api/setup/openrouter/oauth/exchange', {
-                code: event.data.code,
+                code,
                 codeVerifier: verifier,
                 codeChallengeMethod: method
             });
