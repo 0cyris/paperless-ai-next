@@ -58,9 +58,33 @@ async function testSuccessfulExchange() {
     {
       code: 'auth-code-123',
       code_verifier: 'verifier-abc',
-      code_challenge_method: 's256',
+      // PKCE method names are case-sensitive; OpenRouter rejects 's256'.
+      code_challenge_method: 'S256',
     },
-    'Expected the code, verifier, and normalized challenge method in the request body'
+    'Expected the code, verifier, and canonical challenge method in the request body'
+  );
+}
+
+async function testMethodCasingIsCanonicalized() {
+  const state = { calls: [] };
+
+  const setupService = loadSetupServiceWithAxiosMock({
+    post: async (url, body) => {
+      state.calls.push({ url, body });
+      return { data: { key: 'sk-or-v1-generated-key' } };
+    },
+  });
+
+  await setupService.exchangeOpenRouterOauthCode({
+    code: 'auth-code-123',
+    codeVerifier: 'verifier-abc',
+    codeChallengeMethod: 's256',
+  });
+
+  assert.strictEqual(
+    state.calls[0].body.code_challenge_method,
+    'S256',
+    'Expected lowercase input to be sent with the canonical S256 spelling'
   );
 }
 
@@ -132,12 +156,38 @@ async function testRejectsResponseWithoutKey() {
   );
 }
 
+async function testSurfacesUpstreamErrorMessage() {
+  const setupService = loadSetupServiceWithAxiosMock({
+    post: async () => {
+      const error = new Error('Request failed with status code 400');
+      error.response = {
+        status: 400,
+        data: { error: { message: 'Invalid code_verifier', code: 400 } },
+      };
+      throw error;
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      setupService.exchangeOpenRouterOauthCode({
+        code: 'auth-code-123',
+        codeVerifier: 'verifier-abc',
+        codeChallengeMethod: 'S256',
+      }),
+    /OpenRouter rejected the key exchange: Invalid code_verifier/,
+    'Expected the upstream OpenRouter error message, not the generic axios one'
+  );
+}
+
 async function main() {
   await testSuccessfulExchange();
+  await testMethodCasingIsCanonicalized();
   await testPlainChallengeMethodAccepted();
   await testRejectsEmptyCode();
   await testRejectsUnknownChallengeMethod();
   await testRejectsResponseWithoutKey();
+  await testSurfacesUpstreamErrorMessage();
 }
 
 main()

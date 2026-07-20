@@ -1363,9 +1363,14 @@ class SetupService {
   }) {
     const normalizedCode = String(code || '').trim();
     const normalizedVerifier = String(codeVerifier || '').trim();
-    const normalizedMethod = String(codeChallengeMethod || '')
+    // PKCE method names are case-sensitive ('S256', 'plain'); accept any
+    // input casing but always send the canonical spelling — a lowercased
+    // 's256' makes OpenRouter's challenge verification fail with a 400.
+    const methodInput = String(codeChallengeMethod || '')
       .trim()
       .toLowerCase();
+    const canonicalMethod =
+      methodInput === 's256' ? 'S256' : methodInput === 'plain' ? 'plain' : '';
 
     if (!normalizedCode) {
       throw new Error('An authorization code is required.');
@@ -1373,25 +1378,46 @@ class SetupService {
     if (!normalizedVerifier) {
       throw new Error('A code verifier is required.');
     }
-    if (!['s256', 'plain'].includes(normalizedMethod)) {
+    if (!canonicalMethod) {
       throw new Error('An unsupported code challenge method was provided.');
     }
 
-    const response = await this.withValidationTimeout(
-      axios.post(
-        'https://openrouter.ai/api/v1/auth/keys',
-        {
-          code: normalizedCode,
-          code_verifier: normalizedVerifier,
-          code_challenge_method: normalizedMethod,
-        },
-        {
-          headers: { 'Content-Type': 'application/json' },
-          timeout: this.getValidationTimeoutMs(),
-        }
-      ),
-      'OpenRouter OAuth key exchange'
-    );
+    let response;
+    try {
+      response = await this.withValidationTimeout(
+        axios.post(
+          'https://openrouter.ai/api/v1/auth/keys',
+          {
+            code: normalizedCode,
+            code_verifier: normalizedVerifier,
+            code_challenge_method: canonicalMethod,
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: this.getValidationTimeoutMs(),
+          }
+        ),
+        'OpenRouter OAuth key exchange'
+      );
+    } catch (error) {
+      // Surface OpenRouter's own error text instead of axios' generic
+      // "Request failed with status code NNN". Never include the code,
+      // verifier, or key in the message.
+      const upstreamMessage = String(
+        error?.response?.data?.error?.message ||
+          error?.response?.data?.message ||
+          ''
+      ).trim();
+      if (upstreamMessage) {
+        throw new Error(
+          `OpenRouter rejected the key exchange: ${upstreamMessage}`,
+          {
+            cause: error,
+          }
+        );
+      }
+      throw error;
+    }
 
     const key = String(response.data?.key || '').trim();
     if (!key) {
