@@ -735,6 +735,24 @@ class SetupWizard {
         // in quick succession (e.g. a double click) can race on that record
         // and returns a 409 from OpenRouter. Guard against that here.
         if (this.openRouterConnectBtn.disabled) return;
+
+        // OpenRouter's docs only document localhost (any port) as a supported
+        // non-HTTPS callback_url; a private LAN IP over plain HTTP (the common
+        // self-hosted deployment) is neither localhost nor publicly reachable,
+        // and OpenRouter's app-registration step fails with a 409 for it. Catch
+        // that here instead of sending the user into a confusing upstream error.
+        const hostname = window.location.hostname;
+        const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+        const isSecure = window.location.protocol === 'https:';
+        if (!isLoopback && !isSecure) {
+            await this.showPopup({
+                icon: 'warning',
+                title: 'OpenRouter connect unavailable here',
+                text: "OpenRouter's account-connect flow only works over HTTPS or from localhost, and this page is loaded over plain HTTP at a non-localhost address. Create an API key directly at openrouter.ai/keys and paste it above instead."
+            });
+            return;
+        }
+
         this.setButtonLoading(this.openRouterConnectBtn, true, 'Connecting...');
 
         const { verifier, challenge, method } = await this.buildOpenRouterPkce();
