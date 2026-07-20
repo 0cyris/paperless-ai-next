@@ -358,6 +358,7 @@
                             <select id="ocrProvider" class="setup-input">
                                 <option value="mistral" <%= (config.OCR_PROVIDER || 'mistral') === 'mistral' ? 'selected' : '' %>>Mistral OCR API</option>
                                 <option value="custom" <%= ((config.OCR_PROVIDER || 'mistral') === 'custom' || (config.OCR_PROVIDER || 'mistral') === 'ollama') ? 'selected' : '' %>>Custom (Ollama, LM Studio, local models)</option>
+                                <option value="openrouter" <%= (config.OCR_PROVIDER || 'mistral') === 'openrouter' ? 'selected' : '' %>>OpenRouter</option>
                             </select>
                         </div>
                         <div id="ocrApiUrlContainer" class="space-y-2">
@@ -368,6 +369,21 @@
                         <div id="ocrApiKeyContainer" class="space-y-2">
                             <label for="ocrApiKey" class="text-sm font-medium">OCR API key</label>
                             <input id="ocrApiKey" type="password" class="setup-input" placeholder="Optional for local/custom OCR, required for Mistral">
+                            <div id="openRouterConnectRow" class="hidden mt-2">
+                                <button type="button" id="openRouterConnectBtn" class="setup-btn setup-btn-warning flex items-center gap-2">
+                                    <i class="fas fa-key"></i>
+                                    <span>Connect OpenRouter account</span>
+                                </button>
+                                <p class="setup-hint">Creates an API key in your OpenRouter account via OAuth — no manual copy/paste.</p>
+                            </div>
+                        </div>
+                        <div id="ocrOpenRouterZdrRow" class="hidden space-y-2">
+                            <label for="ocrOpenRouterZdr" class="text-sm font-medium">OpenRouter Zero Data Retention only</label>
+                            <select id="ocrOpenRouterZdr" class="setup-input">
+                                <option value="no" <%= config.OCR_OPENROUTER_ZDR === 'yes' ? '' : 'selected' %>>No</option>
+                                <option value="yes" <%= config.OCR_OPENROUTER_ZDR === 'yes' ? 'selected' : '' %>>Yes</option>
+                            </select>
+                            <p class="setup-hint">Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models.</p>
                         </div>
                         <div class="space-y-2">
                             <label for="mistralOcrModel" class="text-sm font-medium">OCR model</label>

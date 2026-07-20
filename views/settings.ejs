@@ -700,6 +700,7 @@
                                     <select id="ocrProvider" name="ocrProvider" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                                         <option value="mistral" <%= (config.OCR_PROVIDER || 'mistral') === 'mistral' ? 'selected' : '' %>>Mistral OCR API</option>
                                         <option value="custom" <%= ((config.OCR_PROVIDER || 'mistral') === 'custom' || (config.OCR_PROVIDER || 'mistral') === 'ollama') ? 'selected' : '' %>>Custom (Ollama, LM Studio, local models)</option>
+                                        <option value="openrouter" <%= (config.OCR_PROVIDER || 'mistral') === 'openrouter' ? 'selected' : '' %>>OpenRouter</option>
                                     </select>
                                     <p class="text-xs text-gray-500">ENV: OCR_PROVIDER · Restart required</p>
                                 </div>
@@ -715,6 +716,21 @@
                                         <button type="button" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" data-input="ocrApiKey"><i class="fas fa-eye"></i></button>
                                     </div>
                                     <p class="text-xs text-gray-500">ENV: OCR_API_KEY (legacy fallback: MISTRAL_API_KEY) · Restart required</p>
+                                    <div id="openRouterConnectContainer" class="space-y-2 hidden">
+                                        <button type="button" id="openRouterConnectBtn" class="toolbar-btn toolbar-btn--warning flex items-center gap-2">
+                                            <i class="fas fa-key"></i>
+                                            <span>Connect OpenRouter account</span>
+                                        </button>
+                                        <p class="text-xs text-gray-500">Creates an API key in your OpenRouter account via OAuth — no manual copy/paste.</p>
+                                    </div>
+                                </div>
+                                <div id="ocrOpenRouterZdrContainer" class="hidden">
+                                    <%- include('partials/settings-switch', {
+                                        id: 'ocrOpenRouterZdr',
+                                        label: 'Zero Data Retention only',
+                                        checked: config.OCR_OPENROUTER_ZDR === 'yes',
+                                        hint: 'ENV: OCR_OPENROUTER_ZDR · Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models · Restart required'
+                                    }) %>
                                 </div>
                                 <div class="space-y-2">
                                     <label for="mistralOcrModel" class="text-sm font-medium">OCR Model</label>

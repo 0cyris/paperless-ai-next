@@ -45,6 +45,9 @@ class MistralOcrService {
     const normalizedProvider = String(config.mistralOcr?.provider || 'mistral')
       .trim()
       .toLowerCase();
+    if (normalizedProvider === 'openrouter') {
+      return 'openrouter';
+    }
     return normalizedProvider === 'ollama' || normalizedProvider === 'custom'
       ? 'ollama'
       : 'mistral';
@@ -62,9 +65,19 @@ class MistralOcrService {
       );
     }
 
+    if (this.provider === 'openrouter') {
+      return String(
+        config.mistralOcr?.apiUrl || 'https://openrouter.ai/api/v1'
+      ).replace(/\/+$/, '');
+    }
+
     return String(
       config.mistralOcr?.apiUrl || 'https://api.mistral.ai/v1'
     ).replace(/\/+$/, '');
+  }
+
+  get openRouterZdr() {
+    return config.mistralOcr?.openRouterZdr === 'yes';
   }
 
   isEnabled() {
@@ -176,7 +189,7 @@ class MistralOcrService {
     documentId = null,
     opts = {}
   ) {
-    if (this.provider === 'ollama') {
+    if (this.provider === 'ollama' || this.provider === 'openrouter') {
       return this.performOcrWithOllama(base64, mimeType, documentId, opts);
     }
 
@@ -219,7 +232,7 @@ class MistralOcrService {
         console.error(
           `[TIMEOUT][OCR] Mistral OCR request timed out: ${error.message}`
         );
-        throw new Error(timeoutMessage);
+        throw new Error(timeoutMessage, { cause: error });
       }
       throw error;
     }
@@ -365,6 +378,83 @@ class MistralOcrService {
   }
 
   /**
+   * OCR a single image via OpenRouter's OpenAI-compatible chat completions
+   * endpoint. Unlike the local-vision path there is no endpoint
+   * autodetection or Ollama-native fallback — OpenRouter only exposes an
+   * OpenAI-compatible API at a fixed base URL.
+   * @param {string} imageBase64
+   * @param {string} imageMimeType
+   * @returns {Promise<string>}
+   */
+  async _performOcrWithOpenRouter(imageBase64, imageMimeType) {
+    if (!this.apiKey) {
+      throw new Error('OCR_API_KEY is not configured for OpenRouter');
+    }
+
+    const imageDataUrl = `data:${imageMimeType};base64,${imageBase64}`;
+    const body = {
+      model: this.model,
+      temperature: 0,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Perform OCR on this image. Return only the extracted text in plain text. Do not add explanations.',
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageDataUrl,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    if (this.openRouterZdr) {
+      body.provider = { zdr: true };
+    }
+
+    let response;
+    try {
+      response = await axios.post(`${this.apiBase}/chat/completions`, body, {
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: this.ocrTimeoutMs,
+      });
+    } catch (error) {
+      if (isTimeoutError(error)) {
+        const timeoutMessage = buildTimeoutErrorMessage(
+          'OCR',
+          this.ocrTimeoutMs
+        );
+        console.error(
+          `[TIMEOUT][OCR] OpenRouter OCR request timed out: ${error.message}`
+        );
+        throw new Error(timeoutMessage, { cause: error });
+      }
+      throw error;
+    }
+
+    const ocrText = String(
+      response.data?.choices?.[0]?.message?.content || ''
+    ).trim();
+
+    if (!ocrText) {
+      throw new Error(
+        `OpenRouter OCR returned empty output for ${imageMimeType}`
+      );
+    }
+
+    return ocrText;
+  }
+
+  /**
    * Run a single image through the local vision model, trying the
    * OpenAI-compatible and Ollama-native endpoints in the detected order.
    * @param {string} imageBase64
@@ -372,6 +462,10 @@ class MistralOcrService {
    * @returns {Promise<string>}
    */
   async _performLocalOcrOnImage(imageBase64, imageMimeType) {
+    if (this.provider === 'openrouter') {
+      return this._performOcrWithOpenRouter(imageBase64, imageMimeType);
+    }
+
     const normalizedApiBase = await this.resolveLocalOcrApiBase();
     const baseApiUrl = normalizedApiBase.replace(/\/v1$/i, '');
     const openAiApiUrl = /\/v1$/i.test(normalizedApiBase)
@@ -767,13 +861,17 @@ class MistralOcrService {
         ({ base64, mimeType } =
           await this.downloadDocumentAsBase64(normalizedDocumentId));
       } catch (dlErr) {
-        throw new Error(`Download failed: ${dlErr.message}`);
+        throw new Error(`Download failed: ${dlErr.message}`, { cause: dlErr });
       }
       emit('download', `Download complete (${mimeType}).`);
 
       // Step 2: OCR
       const providerLabel =
-        this.provider === 'ollama' ? 'Local OCR' : 'Mistral OCR';
+        this.provider === 'ollama'
+          ? 'Local OCR'
+          : this.provider === 'openrouter'
+            ? 'OpenRouter OCR'
+            : 'Mistral OCR';
       emit('ocr', `Sending document to ${providerLabel}…`);
       let ocrText;
       try {
@@ -787,7 +885,9 @@ class MistralOcrService {
           }
         );
       } catch (ocrErr) {
-        throw new Error(`${providerLabel} failed: ${ocrErr.message}`);
+        throw new Error(`${providerLabel} failed: ${ocrErr.message}`, {
+          cause: ocrErr,
+        });
       }
       const previewLen = Math.min(ocrText.length, 120);
       emit('ocr', `OCR complete. Extracted ${ocrText.length} characters.`, {
@@ -837,7 +937,9 @@ class MistralOcrService {
           const aiErrorMessage = isTimeoutError(aiErr)
             ? buildTimeoutErrorMessage('AI')
             : aiErr.message;
-          throw new Error(`AI analysis failed after OCR: ${aiErrorMessage}`);
+          throw new Error(`AI analysis failed after OCR: ${aiErrorMessage}`, {
+            cause: aiErr,
+          });
         }
       }
 
@@ -912,7 +1014,7 @@ class MistralOcrService {
         ? buildTimeoutErrorMessage('AI')
         : error.message;
       emit('error', `AI analysis failed: ${aiErrorMessage}`);
-      throw new Error(aiErrorMessage);
+      throw new Error(aiErrorMessage, { cause: error });
     }
   }
 

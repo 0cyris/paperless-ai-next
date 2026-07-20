@@ -462,6 +462,9 @@ module.exports = {
       10
     ),
     pdfRenderDpi: parseInt(process.env.OCR_PDF_RENDER_DPI || '150', 10),
+    // OpenRouter-only: restrict chat routing and model discovery to
+    // Zero-Data-Retention endpoints.
+    openRouterZdr: parseEnvBoolean(process.env.OCR_OPENROUTER_ZDR, 'no'),
   },
   customFields: process.env.CUSTOM_FIELDS || '',
   aiProvider: process.env.AI_PROVIDER || 'openai',

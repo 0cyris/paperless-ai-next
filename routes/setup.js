@@ -729,6 +729,27 @@ router.get('/login', (req, res) => {
   });
 });
 
+/**
+ * @swagger
+ * /openrouter/callback:
+ *   get:
+ *     summary: OpenRouter OAuth PKCE redirect target
+ *     description: |
+ *       Renders a small page opened in a popup during the "Connect OpenRouter
+ *       account" flow. The page reads the `code` query parameter client-side
+ *       and posts it back to the window that opened the popup; the server
+ *       never inspects or uses the authorization code. Reachable without
+ *       authentication because the setup wizard runs before any account exists.
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: Callback page rendered
+ */
+router.get('/openrouter/callback', (req, res) => {
+  res.render('openrouter-callback');
+});
+
 // Login page route
 /**
  * @swagger
@@ -3676,6 +3697,7 @@ function toEnvPreviewLines(config) {
     'OCR_PDF_RENDER_ENABLED',
     'OCR_PDF_RENDER_MAX_PAGES',
     'OCR_PDF_RENDER_DPI',
+    'OCR_OPENROUTER_ZDR',
   ];
 
   return previewKeys
@@ -3952,6 +3974,7 @@ async function validateOcrConnectionForSetup({
   apiUrl,
   apiKey,
   model,
+  zdr,
   setupOcrValidationTimeoutMs,
 }) {
   return setupService.withTemporaryValidationTimeout(
@@ -3995,6 +4018,7 @@ async function validateOcrConnectionForSetup({
         apiUrl: resolvedApiUrl,
         apiKey: String(apiKey || '').trim(),
         model: String(model || '').trim() || 'mistral-ocr-latest',
+        zdr,
       });
 
       return {
@@ -4083,6 +4107,7 @@ async function discoverOcrModelsForSetup({
   provider,
   apiUrl,
   apiKey,
+  zdr,
   setupOcrValidationTimeoutMs,
 }) {
   return setupService.withTemporaryValidationTimeout(
@@ -4148,6 +4173,7 @@ async function discoverOcrModelsForSetup({
         provider: normalizedProvider,
         apiUrl: resolvedApiUrl,
         apiKey: normalizedApiKey,
+        zdr,
       });
 
       return {
@@ -4315,6 +4341,7 @@ router.get('/setup', async (req, res) => {
       OCR_API_KEY: process.env.OCR_API_KEY || '',
       MISTRAL_API_KEY: process.env.MISTRAL_API_KEY || '',
       MISTRAL_OCR_MODEL: process.env.MISTRAL_OCR_MODEL || 'mistral-ocr-latest',
+      OCR_OPENROUTER_ZDR: process.env.OCR_OPENROUTER_ZDR || 'no',
       SETUP_VALIDATION_TIMEOUT_MS:
         process.env.SETUP_VALIDATION_TIMEOUT_MS || '30000',
       SETUP_OCR_VALIDATION_TIMEOUT_MS:
@@ -4751,6 +4778,26 @@ router.post('/api/setup/ai/models', express.json(), async (req, res) => {
  *     summary: Test OCR provider connectivity during setup
  *     tags:
  *       - Setup
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               enabled:
+ *                 type: string
+ *               provider:
+ *                 type: string
+ *                 enum: [mistral, custom, ollama, openrouter]
+ *               apiUrl:
+ *                 type: string
+ *               apiKey:
+ *                 type: string
+ *               model:
+ *                 type: string
+ *               zdr:
+ *                 type: boolean
+ *                 description: OpenRouter-only. Restrict routing to Zero-Data-Retention endpoints.
  *     responses:
  *       200:
  *         description: OCR connectivity result returned
@@ -4767,6 +4814,7 @@ router.post('/api/setup/ocr/test', express.json(), async (req, res) => {
       apiUrl: req.body?.apiUrl,
       apiKey: req.body?.apiKey,
       model: req.body?.model,
+      zdr: req.body?.zdr,
       setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
     });
 
@@ -4787,6 +4835,22 @@ router.post('/api/setup/ocr/test', express.json(), async (req, res) => {
  *     summary: Discover available OCR models during setup
  *     tags:
  *       - Setup
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               provider:
+ *                 type: string
+ *                 enum: [mistral, custom, ollama, openrouter]
+ *               apiUrl:
+ *                 type: string
+ *               apiKey:
+ *                 type: string
+ *               zdr:
+ *                 type: boolean
+ *                 description: OpenRouter-only. Limit discovery to Zero-Data-Retention models.
  *     responses:
  *       200:
  *         description: OCR model list returned
@@ -4801,6 +4865,7 @@ router.post('/api/setup/ocr/models', express.json(), async (req, res) => {
       provider: req.body?.provider,
       apiUrl: req.body?.apiUrl,
       apiKey: req.body?.apiKey,
+      zdr: req.body?.zdr,
       setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
     });
 
@@ -4813,6 +4878,70 @@ router.post('/api/setup/ocr/models', express.json(), async (req, res) => {
     });
   }
 });
+
+/**
+ * @swagger
+ * /api/setup/openrouter/oauth/exchange:
+ *   post:
+ *     summary: Exchange an OpenRouter OAuth PKCE code for an API key during setup
+ *     tags:
+ *       - Setup
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - code
+ *               - codeVerifier
+ *               - codeChallengeMethod
+ *             properties:
+ *               code:
+ *                 type: string
+ *               codeVerifier:
+ *                 type: string
+ *               codeChallengeMethod:
+ *                 type: string
+ *                 enum: [S256, plain]
+ *     responses:
+ *       200:
+ *         description: API key created
+ *       400:
+ *         description: Invalid or expired authorization code
+ */
+router.post(
+  '/api/setup/openrouter/oauth/exchange',
+  express.json(),
+  async (req, res) => {
+    try {
+      if (!(await ensureSetupOpenOrRespond(res))) {
+        return;
+      }
+
+      const key = await setupService.exchangeOpenRouterOauthCode({
+        code: req.body?.code,
+        codeVerifier: req.body?.codeVerifier,
+        codeChallengeMethod: req.body?.codeChallengeMethod,
+      });
+
+      return res.json({
+        success: true,
+        data: { key },
+        message: 'OpenRouter API key created.',
+      });
+    } catch (error) {
+      console.error(
+        '[ERROR] POST /api/setup/openrouter/oauth/exchange:',
+        error.message
+      );
+      return res.status(400).json({
+        success: false,
+        error: error.message || 'Could not exchange OpenRouter OAuth code.',
+      });
+    }
+  }
+);
 
 /**
  * @swagger
@@ -4943,6 +5072,7 @@ router.post(
         apiUrl: req.body?.apiUrl,
         apiKey: resolveSettingsOcrApiKey(req.body?.apiKey),
         model: req.body?.model,
+        zdr: req.body?.zdr,
         setupOcrValidationTimeoutMs:
           req.body?.setupOcrValidationTimeoutMs ??
           req.body?.setupValidationTimeoutMs,
@@ -5009,6 +5139,7 @@ router.post(
         provider: req.body?.provider,
         apiUrl: req.body?.apiUrl,
         apiKey: resolveSettingsOcrApiKey(req.body?.apiKey),
+        zdr: req.body?.zdr,
         setupOcrValidationTimeoutMs:
           req.body?.setupOcrValidationTimeoutMs ??
           req.body?.setupValidationTimeoutMs,
@@ -5020,6 +5151,67 @@ router.post(
       return res.status(400).json({
         success: false,
         error: error.message || 'Could not discover OCR models.',
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/settings/openrouter/oauth/exchange:
+ *   post:
+ *     summary: Exchange an OpenRouter OAuth PKCE code for an API key
+ *     tags:
+ *       - Settings
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - code
+ *               - codeVerifier
+ *               - codeChallengeMethod
+ *             properties:
+ *               code:
+ *                 type: string
+ *               codeVerifier:
+ *                 type: string
+ *               codeChallengeMethod:
+ *                 type: string
+ *                 enum: [S256, plain]
+ *     responses:
+ *       200:
+ *         description: API key created
+ *       400:
+ *         description: Invalid or expired authorization code
+ */
+router.post(
+  '/api/settings/openrouter/oauth/exchange',
+  isAuthenticated,
+  express.json(),
+  async (req, res) => {
+    try {
+      const key = await setupService.exchangeOpenRouterOauthCode({
+        code: req.body?.code,
+        codeVerifier: req.body?.codeVerifier,
+        codeChallengeMethod: req.body?.codeChallengeMethod,
+      });
+
+      return res.json({
+        success: true,
+        data: { key },
+        message: 'OpenRouter API key created.',
+      });
+    } catch (error) {
+      console.error(
+        '[ERROR] POST /api/settings/openrouter/oauth/exchange:',
+        error.message
+      );
+      return res.status(400).json({
+        success: false,
+        error: error.message || 'Could not exchange OpenRouter OAuth code.',
       });
     }
   }
@@ -5176,8 +5368,12 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
     const mistralOcrModel =
       String(req.body?.mistralOcrModel || 'mistral-ocr-latest').trim() ||
       'mistral-ocr-latest';
+    const ocrOpenRouterZdr = parseBooleanInput(
+      req.body?.ocrOpenRouterZdr,
+      false
+    );
 
-    if (!['mistral', 'custom', 'ollama'].includes(ocrProvider)) {
+    if (!['mistral', 'custom', 'ollama', 'openrouter'].includes(ocrProvider)) {
       return res.status(400).json({
         success: false,
         error: 'A valid OCR provider is required.',
@@ -5189,6 +5385,14 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
         success: false,
         error:
           'Mistral API key is required when OCR provider is set to mistral.',
+      });
+    }
+
+    if (mistralOcrEnabled && ocrProvider === 'openrouter' && !ocrApiKey) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'OpenRouter API key is required when OCR provider is set to openrouter.',
       });
     }
 
@@ -5266,6 +5470,7 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
       apiUrl: ocrApiUrl,
       apiKey: ocrApiKey,
       model: mistralOcrModel,
+      zdr: ocrOpenRouterZdr,
       setupOcrValidationTimeoutMs,
     });
 
@@ -5314,6 +5519,7 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
       OCR_API_KEY: ocrApiKey,
       MISTRAL_API_KEY: ocrApiKey,
       MISTRAL_OCR_MODEL: mistralOcrModel,
+      OCR_OPENROUTER_ZDR: ocrOpenRouterZdr ? 'yes' : 'no',
       SETUP_VALIDATION_TIMEOUT_MS: String(setupValidationTimeoutMs),
       SETUP_OCR_VALIDATION_TIMEOUT_MS: String(setupOcrValidationTimeoutMs),
     };
@@ -6482,6 +6688,7 @@ router.get('/settings', async (req, res) => {
     OCR_PDF_RENDER_ENABLED: process.env.OCR_PDF_RENDER_ENABLED || 'yes',
     OCR_PDF_RENDER_MAX_PAGES: process.env.OCR_PDF_RENDER_MAX_PAGES || '10',
     OCR_PDF_RENDER_DPI: process.env.OCR_PDF_RENDER_DPI || '150',
+    OCR_OPENROUTER_ZDR: process.env.OCR_OPENROUTER_ZDR || 'no',
     SETUP_OCR_VALIDATION_TIMEOUT_MS:
       process.env.SETUP_OCR_VALIDATION_TIMEOUT_MS ||
       process.env.SETUP_VALIDATION_TIMEOUT_MS ||
@@ -7976,6 +8183,7 @@ router.post('/settings', express.json(), async (req, res) => {
       ocrPdfRenderEnabled,
       ocrPdfRenderMaxPages,
       ocrPdfRenderDpi,
+      ocrOpenRouterZdr,
       globalRateLimitWindowMs,
       globalRateLimitMax,
       trustProxy,
@@ -8065,6 +8273,7 @@ router.post('/settings', express.json(), async (req, res) => {
       OCR_PDF_RENDER_ENABLED: process.env.OCR_PDF_RENDER_ENABLED || 'yes',
       OCR_PDF_RENDER_MAX_PAGES: process.env.OCR_PDF_RENDER_MAX_PAGES || '10',
       OCR_PDF_RENDER_DPI: process.env.OCR_PDF_RENDER_DPI || '150',
+      OCR_OPENROUTER_ZDR: process.env.OCR_OPENROUTER_ZDR || 'no',
       GLOBAL_RATE_LIMIT_WINDOW_MS:
         process.env.GLOBAL_RATE_LIMIT_WINDOW_MS || '900000',
       GLOBAL_RATE_LIMIT_MAX: process.env.GLOBAL_RATE_LIMIT_MAX || '1000',
@@ -8133,9 +8342,14 @@ router.post('/settings', express.json(), async (req, res) => {
         30000
       );
 
-    if (!['mistral', 'custom', 'ollama'].includes(normalizedOcrProvider)) {
+    if (
+      !['mistral', 'custom', 'ollama', 'openrouter'].includes(
+        normalizedOcrProvider
+      )
+    ) {
       return res.status(400).json({
-        error: 'Invalid OCR provider. Allowed values are mistral and custom.',
+        error:
+          'Invalid OCR provider. Allowed values are mistral, custom, and openrouter.',
       });
     }
 
@@ -8147,6 +8361,17 @@ router.post('/settings', express.json(), async (req, res) => {
       return res.status(400).json({
         error:
           'Mistral API key is required when OCR fallback is enabled with provider mistral.',
+      });
+    }
+
+    if (
+      effectiveOcrEnabled === 'yes' &&
+      normalizedOcrProvider === 'openrouter' &&
+      !effectiveOcrApiKey
+    ) {
+      return res.status(400).json({
+        error:
+          'OpenRouter API key is required when OCR fallback is enabled with provider openrouter.',
       });
     }
 
@@ -8457,6 +8682,12 @@ router.post('/settings', express.json(), async (req, res) => {
           `[WARN] Invalid OCR_PDF_RENDER_DPI value: ${ocrPdfRenderDpi}. Using default: 150`
         );
         updatedConfig.OCR_PDF_RENDER_DPI = '150';
+      }
+    }
+    if (typeof ocrOpenRouterZdr === 'string') {
+      const normalizedOcrOpenRouterZdr = ocrOpenRouterZdr.trim().toLowerCase();
+      if (['yes', 'no'].includes(normalizedOcrOpenRouterZdr)) {
+        updatedConfig.OCR_OPENROUTER_ZDR = normalizedOcrOpenRouterZdr;
       }
     }
     updatedConfig.SETUP_OCR_VALIDATION_TIMEOUT_MS = String(

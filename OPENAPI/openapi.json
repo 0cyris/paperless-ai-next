@@ -753,6 +753,20 @@
         }
       }
     },
+    "/openrouter/callback": {
+      "get": {
+        "summary": "OpenRouter OAuth PKCE redirect target",
+        "description": "Renders a small page opened in a popup during the \"Connect OpenRouter\naccount\" flow. The page reads the `code` query parameter client-side\nand posts it back to the window that opened the popup; the server\nnever inspects or uses the authorization code. Reachable without\nauthentication because the setup wizard runs before any account exists.\n",
+        "tags": [
+          "Setup"
+        ],
+        "responses": {
+          "200": {
+            "description": "Callback page rendered"
+          }
+        }
+      }
+    },
     "/logout": {
       "get": {
         "summary": "Log out user and clear JWT cookie",
@@ -2569,6 +2583,42 @@
         "tags": [
           "Setup"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "mistral",
+                      "custom",
+                      "ollama",
+                      "openrouter"
+                    ]
+                  },
+                  "apiUrl": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "zdr": {
+                    "type": "boolean",
+                    "description": "OpenRouter-only. Restrict routing to Zero-Data-Retention endpoints."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OCR connectivity result returned"
@@ -2582,9 +2632,85 @@
         "tags": [
           "Setup"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "mistral",
+                      "custom",
+                      "ollama",
+                      "openrouter"
+                    ]
+                  },
+                  "apiUrl": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  },
+                  "zdr": {
+                    "type": "boolean",
+                    "description": "OpenRouter-only. Limit discovery to Zero-Data-Retention models."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OCR model list returned"
+          }
+        }
+      }
+    },
+    "/api/setup/openrouter/oauth/exchange": {
+      "post": {
+        "summary": "Exchange an OpenRouter OAuth PKCE code for an API key during setup",
+        "tags": [
+          "Setup"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "codeVerifier",
+                  "codeChallengeMethod"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "codeVerifier": {
+                    "type": "string"
+                  },
+                  "codeChallengeMethod": {
+                    "type": "string",
+                    "enum": [
+                      "S256",
+                      "plain"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "API key created"
+          },
+          "400": {
+            "description": "Invalid or expired authorization code"
           }
         }
       }
@@ -2686,6 +2812,52 @@
           },
           "401": {
             "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/settings/openrouter/oauth/exchange": {
+      "post": {
+        "summary": "Exchange an OpenRouter OAuth PKCE code for an API key",
+        "tags": [
+          "Settings"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "codeVerifier",
+                  "codeChallengeMethod"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "codeVerifier": {
+                    "type": "string"
+                  },
+                  "codeChallengeMethod": {
+                    "type": "string",
+                    "enum": [
+                      "S256",
+                      "plain"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "API key created"
+          },
+          "400": {
+            "description": "Invalid or expired authorization code"
           }
         }
       }

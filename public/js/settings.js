@@ -552,6 +552,7 @@ function initializeFormHandlers() {
   const fetchOcrModelsBtn = document.getElementById('fetchOcrModelsBtn');
   const testOcrBtn = document.getElementById('testOcrBtn');
   const ocrTestState = document.getElementById('ocrTestState');
+  const openRouterConnectBtn = document.getElementById('openRouterConnectBtn');
 
   const setButtonLoading = (button, loading, loadingText = 'Loading...') => {
     if (!button) return;
@@ -1001,7 +1002,9 @@ function initializeFormHandlers() {
 
   const normalizeOcrProviderForApi = (provider) => {
     const normalized = String(provider || 'mistral').toLowerCase();
-    return normalized === 'custom' ? 'custom' : 'mistral';
+    return normalized === 'custom' || normalized === 'openrouter'
+      ? normalized
+      : 'mistral';
   };
 
   const normalizeOcrApiUrlForProvider = (provider, rawUrl) => {
@@ -1041,7 +1044,7 @@ function initializeFormHandlers() {
     if (ocrApiUrlContainer) {
       ocrApiUrlContainer.classList.toggle(
         'hidden',
-        !enabled || provider !== 'custom'
+        !enabled || (provider !== 'custom' && provider !== 'openrouter')
       );
     }
 
@@ -1053,7 +1056,27 @@ function initializeFormHandlers() {
     if (ocrPdfRenderContainer) {
       ocrPdfRenderContainer.classList.toggle(
         'hidden',
-        !enabled || provider !== 'custom'
+        !enabled || (provider !== 'custom' && provider !== 'openrouter')
+      );
+    }
+
+    const ocrOpenRouterZdrContainer = document.getElementById(
+      'ocrOpenRouterZdrContainer'
+    );
+    if (ocrOpenRouterZdrContainer) {
+      ocrOpenRouterZdrContainer.classList.toggle(
+        'hidden',
+        !enabled || provider !== 'openrouter'
+      );
+    }
+
+    const openRouterConnectContainer = document.getElementById(
+      'openRouterConnectContainer'
+    );
+    if (openRouterConnectContainer) {
+      openRouterConnectContainer.classList.toggle(
+        'hidden',
+        !enabled || provider !== 'openrouter'
       );
     }
 
@@ -1215,9 +1238,7 @@ function initializeFormHandlers() {
         populateModelSelect(
           quickstartOcrModelSelect,
           ocrCandidateModels,
-          ocrCandidateModels.length > 0
-            ? 'Select OCR model'
-            : 'No models found'
+          ocrCandidateModels.length > 0 ? 'Select OCR model' : 'No models found'
         );
         if (
           quickstartDetection?.suggestedOcrModel &&
@@ -1228,7 +1249,8 @@ function initializeFormHandlers() {
         }
 
         if (quickstartEnableOcrCheckbox) {
-          quickstartEnableOcrCheckbox.disabled = ocrCandidateModels.length === 0;
+          quickstartEnableOcrCheckbox.disabled =
+            ocrCandidateModels.length === 0;
           quickstartEnableOcrCheckbox.checked = ocrCandidateModels.length > 0;
         }
 
@@ -1571,6 +1593,7 @@ function initializeFormHandlers() {
         apiKey: String(ocrApiKeyInput?.value || '').trim(),
         model:
           String(ocrModelInput?.value || '').trim() || 'mistral-ocr-latest',
+        zdr: document.getElementById('ocrOpenRouterZdr')?.value === 'yes',
         setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
       };
 
@@ -1659,6 +1682,7 @@ function initializeFormHandlers() {
             provider,
             apiUrl,
             apiKey,
+            zdr: document.getElementById('ocrOpenRouterZdr')?.value === 'yes',
             setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
           }),
         });
@@ -1700,6 +1724,136 @@ function initializeFormHandlers() {
       } finally {
         setButtonLoading(fetchOcrModelsBtn, false);
       }
+    });
+  }
+
+  const base64UrlEncode = (bytes) => {
+    let binary = '';
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte);
+    });
+    return btoa(binary)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  };
+
+  if (openRouterConnectBtn) {
+    let openRouterMessageListenerRegistered = false;
+
+    openRouterConnectBtn.addEventListener('click', async () => {
+      const verifierBytes = crypto.getRandomValues(new Uint8Array(64));
+      const verifier = base64UrlEncode(verifierBytes);
+
+      let challenge = verifier;
+      let method = 'plain';
+      // Plain HTTP self-hosted deployments may not expose crypto.subtle
+      // (it requires a secure context), so fall back to the PKCE "plain"
+      // method there instead of silently breaking the connect flow.
+      if (window.isSecureContext && window.crypto?.subtle) {
+        const digest = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(verifier)
+        );
+        challenge = base64UrlEncode(new Uint8Array(digest));
+        method = 'S256';
+      }
+
+      sessionStorage.setItem(
+        'openrouterOauth',
+        JSON.stringify({ verifier, method })
+      );
+
+      const callbackUrl = `${window.location.origin}/openrouter/callback`;
+      const authUrl =
+        'https://openrouter.ai/auth?callback_url=' +
+        encodeURIComponent(callbackUrl) +
+        '&code_challenge=' +
+        encodeURIComponent(challenge) +
+        '&code_challenge_method=' +
+        method;
+
+      const popup = window.open(
+        authUrl,
+        'openrouter-oauth',
+        'width=600,height=750'
+      );
+
+      if (!popup) {
+        await Swal.fire({
+          icon: 'error',
+          title: 'Popup blocked',
+          text: 'Allow popups for this page to connect your OpenRouter account.',
+        });
+        return;
+      }
+
+      if (openRouterMessageListenerRegistered) return;
+      openRouterMessageListenerRegistered = true;
+
+      window.addEventListener('message', async (event) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data?.type !== 'openrouter-oauth-code') return;
+
+        const stored = sessionStorage.getItem('openrouterOauth');
+        sessionStorage.removeItem('openrouterOauth');
+        if (!stored) {
+          await Swal.fire({
+            icon: 'error',
+            title: 'OpenRouter connection failed',
+            text: 'The OAuth session expired. Please try connecting again.',
+          });
+          return;
+        }
+
+        const { verifier: storedVerifier, method: storedMethod } =
+          JSON.parse(stored);
+
+        try {
+          const response = await fetch(
+            '/api/settings/openrouter/oauth/exchange',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                code: event.data.code,
+                codeVerifier: storedVerifier,
+                codeChallengeMethod: storedMethod,
+              }),
+            }
+          );
+
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success) {
+            throw new Error(
+              result.error || result.message || 'OpenRouter connection failed'
+            );
+          }
+
+          if (ocrApiKeyInput) {
+            ocrApiKeyInput.value = result.data.key;
+          }
+          if (ocrProviderSelect) {
+            ocrProviderSelect.value = 'openrouter';
+          }
+          toggleOcrFields();
+          setOcrTestPill('default', 'Not tested');
+
+          await Swal.fire({
+            icon: 'success',
+            title: 'OpenRouter connected',
+            text: 'Key created — remember to save settings to persist it.',
+          });
+        } catch (error) {
+          await Swal.fire({
+            icon: 'error',
+            title: 'OpenRouter connection failed',
+            text: error.message || 'Could not exchange OpenRouter OAuth code.',
+          });
+        }
+      });
     });
   }
 
@@ -2318,6 +2472,10 @@ function initializeFormHandlers() {
             formData.get('ocrApiUrl')
           ),
           apiKey: String(formData.get('ocrApiKey') || '').trim(),
+          zdr:
+            String(formData.get('ocrOpenRouterZdr') || 'no')
+              .trim()
+              .toLowerCase() === 'yes',
           setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
         };
 
@@ -3078,6 +3236,7 @@ function initializeRuntimeOverridePills() {
     { selector: '#mistralApiKey', envKey: 'MISTRAL_API_KEY' },
     { selector: '#mistralOcrModel', envKey: 'MISTRAL_OCR_MODEL' },
     { selector: '#ocrPdfRenderEnabled', envKey: 'OCR_PDF_RENDER_ENABLED' },
+    { selector: '#ocrOpenRouterZdr', envKey: 'OCR_OPENROUTER_ZDR' },
     { selector: '#ocrPdfRenderMaxPages', envKey: 'OCR_PDF_RENDER_MAX_PAGES' },
     { selector: '#ocrPdfRenderDpi', envKey: 'OCR_PDF_RENDER_DPI' },
     {
