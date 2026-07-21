@@ -2,14 +2,12 @@ const {
   calculateTokens,
   calculateTotalPromptTokens,
   truncateToTokenLimit,
-  writePromptToFile,
   extractChatMessageContent,
   isTimeoutError,
   buildTimeoutErrorMessage
 } = require('./serviceUtils');
 const OpenAI = require('openai');
 const config = require('../config/config');
-const tiktoken = require('tiktoken');
 const paperlessService = require('./paperlessService');
 const fs = require('fs').promises;
 const path = require('path');
@@ -19,9 +17,27 @@ const responseLogPath = path.join(process.cwd(), 'data', 'logs', 'response.txt')
 const CUSTOM_PROVIDER_FALLBACK_API_KEY = 'no-auth-required';
 
 class CustomOpenAIService {
-  constructor() {
+  // providerName selects the config block ('custom' or 'openrouter') so the
+  // OpenRouter AI provider can reuse this OpenAI-compatible service instead
+  // of duplicating it.
+  constructor(providerName = 'custom') {
+    this.providerName = providerName;
     this.client = null;
     this.tokenizer = null;
+  }
+
+  get providerConfig() {
+    return this.providerName === 'openrouter' ? config.openRouter : config.custom;
+  }
+
+  // Extra OpenAI-incompatible body fields for chat completions. OpenRouter
+  // accepts a `provider` routing object; the openai SDK passes unknown
+  // top-level params through to the request body untouched.
+  get chatRequestExtras() {
+    if (this.providerName === 'openrouter' && config.openRouter?.zdr === 'yes') {
+      return { provider: { zdr: true } };
+    }
+    return {};
   }
 
   _extractFirstJsonValue(text) {
@@ -96,10 +112,10 @@ class CustomOpenAIService {
         parsed: JSON.parse(sanitizedContent),
         normalized: sanitizedContent
       };
-    } catch (_directParseError) {
+    } catch (directParseError) {
       const extractedJson = this._extractFirstJsonValue(sanitizedContent);
       if (!extractedJson) {
-        throw new Error('Invalid JSON response from API');
+        throw new Error('Invalid JSON response from API', { cause: directParseError });
       }
 
       try {
@@ -107,18 +123,18 @@ class CustomOpenAIService {
           parsed: JSON.parse(extractedJson),
           normalized: extractedJson
         };
-      } catch (_extractedParseError) {
-        throw new Error('Invalid JSON response from API');
+      } catch (extractedParseError) {
+        throw new Error('Invalid JSON response from API', { cause: extractedParseError });
       }
     }
   }
 
   initialize() {
-    if (!this.client && config.aiProvider === 'custom') {
+    if (!this.client && config.aiProvider === this.providerName) {
       this.client = new OpenAI({
-        baseURL: config.custom.apiUrl,
+        baseURL: this.providerConfig.apiUrl,
         // OpenAI-compatible SDKs require an apiKey value even when auth is disabled.
-        apiKey: config.custom.apiKey || CUSTOM_PROVIDER_FALLBACK_API_KEY
+        apiKey: this.providerConfig.apiKey || CUSTOM_PROVIDER_FALLBACK_API_KEY
       });
     }
   }
@@ -138,7 +154,7 @@ class CustomOpenAIService {
       try {
         await fs.access(cachePath);
         console.log('[DEBUG] Thumbnail already cached');
-      } catch (err) {
+      } catch {
         console.log('Thumbnail not cached, fetching from Paperless');
 
         const thumbnailData = await paperlessService.getThumbnailImage(id);
@@ -171,7 +187,7 @@ class CustomOpenAIService {
 
       let systemPrompt = '';
       let promptTags = '';
-      const model = config.custom.model;
+      const model = this.providerConfig.model;
 
       // Parse CUSTOM_FIELDS from environment variable
       let customFieldsObj;
@@ -297,6 +313,7 @@ class CustomOpenAIService {
           }
         ],
         temperature: config.aiTemperatureAnalysis,
+        ...this.chatRequestExtras
       });
 
       // Handle response
@@ -380,11 +397,11 @@ class CustomOpenAIService {
       : String(apiData);
 
     // Calculate tokens for the data
-    const dataTokens = await calculateTokens(dataString, config.custom.model);
+    const dataTokens = await calculateTokens(dataString, this.providerConfig.model);
 
     if (dataTokens > maxTokens) {
       console.warn(`[WARNING] External API data (${dataTokens} tokens) exceeds limit (${maxTokens}), truncating`);
-      return await truncateToTokenLimit(dataString, maxTokens, config.custom.model);
+      return await truncateToTokenLimit(dataString, maxTokens, this.providerConfig.model);
     }
 
     console.log(`[DEBUG] External API data validated: ${dataTokens} tokens`);
@@ -426,7 +443,7 @@ class CustomOpenAIService {
 
       // Make API request
       const response = await this.client.chat.completions.create({
-        model: config.custom.model,
+        model: this.providerConfig.model,
         messages: [
           {
             role: "system",
@@ -438,6 +455,7 @@ class CustomOpenAIService {
           }
         ],
         temperature: config.aiTemperatureAnalysis,
+        ...this.chatRequestExtras
       });
 
       // Handle response
@@ -502,7 +520,7 @@ class CustomOpenAIService {
         throw new Error('Custom OpenAI client not initialized - missing API key');
       }
 
-      const model = config.custom.model;
+      const model = this.providerConfig.model;
       const maxContextTokens = Number(config.tokenLimit) || 128000;
       const desiredCompletionTokens = Number(config.responseTokens) || 1000;
       const promptTokens = await calculateTokens(prompt, model);
@@ -525,7 +543,8 @@ class CustomOpenAIService {
           }
         ],
         temperature: config.aiTemperatureGeneration,
-        max_tokens: maxCompletionTokens
+        max_tokens: maxCompletionTokens,
+        ...this.chatRequestExtras
       });
 
       const generatedText = extractChatMessageContent(response?.choices?.[0]?.message, 'Custom OpenAI');
@@ -548,7 +567,7 @@ class CustomOpenAIService {
         throw new Error('Custom OpenAI client not initialized - missing API key');
       }
 
-      const model = config.custom.model;
+      const model = this.providerConfig.model;
 
       // Use token-free endpoint where supported by OpenAI-compatible providers.
       await this.client.models.list();
@@ -562,3 +581,4 @@ class CustomOpenAIService {
 }
 
 module.exports = new CustomOpenAIService();
+module.exports.CustomOpenAIService = CustomOpenAIService;

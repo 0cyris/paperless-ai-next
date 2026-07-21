@@ -72,6 +72,9 @@ const TESTS = {
   'ocr-provider-openrouter': 'test-ocr-provider-openrouter.js',
   'setupservice-openrouter-models': 'test-setupservice-openrouter-models.js',
   'setupservice-openrouter-oauth': 'test-setupservice-openrouter-oauth.js',
+  'ai-provider-openrouter': 'test-ai-provider-openrouter.js',
+  'setupservice-openrouter-ai-models':
+    'test-setupservice-openrouter-ai-models.js',
   'ocr-pdf-render-multipage': 'test-ocr-pdf-render-multipage.js',
   'ocr-pdf-render-fallback': 'test-ocr-pdf-render-fallback.js',
   'ocr-pdf-render-page-failure': 'test-ocr-pdf-render-page-failure.js',
@@ -130,6 +133,8 @@ const AREAS = {
     'ollama-token-metrics',
     'reconciliation-service',
     'settings-paperless-url-fallback',
+    'ai-provider-openrouter',
+    'setupservice-openrouter-ai-models',
   ],
   prompts: ['restriction-service', 'updated-service'],
   quickstart: [

@@ -24,6 +24,7 @@ const bcrypt = require('bcryptjs');
 const QRCode = require('qrcode');
 const { isAuthenticated } = require('./auth.js');
 const customService = require('../services/customService.js');
+const openrouterService = require('../services/openrouterService.js');
 const mistralOcrService = require('../services/mistralOcrService');
 const quickstartService = require('../services/quickstartService');
 const reconciliationService = require('../services/reconciliationService');
@@ -65,6 +66,7 @@ const SETTINGS_SECRET_FIELDS = [
   'OPENAI_API_KEY',
   'OLLAMA_API_KEY',
   'CUSTOM_API_KEY',
+  'OPENROUTER_API_KEY',
   'AZURE_API_KEY',
   'OCR_API_KEY',
   'MISTRAL_API_KEY',
@@ -3568,6 +3570,14 @@ const DEFAULT_AI_PROVIDER_PRESETS = [
     tokenPlaceholder: '',
   },
   {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    provider: 'openrouter',
+    apiUrl: 'https://openrouter.ai/api/v1',
+    model: '',
+    tokenPlaceholder: 'sk-or-v1-...',
+  },
+  {
     id: 'ionos-openai-compatible',
     label: 'IONOS (OpenAI compatible)',
     provider: 'custom',
@@ -3684,6 +3694,10 @@ function toEnvPreviewLines(config) {
     'CUSTOM_BASE_URL',
     'CUSTOM_API_KEY',
     'CUSTOM_MODEL',
+    'OPENROUTER_BASE_URL',
+    'OPENROUTER_API_KEY',
+    'OPENROUTER_MODEL',
+    'OPENROUTER_ZDR',
     'AZURE_ENDPOINT',
     'AZURE_API_KEY',
     'AZURE_DEPLOYMENT_NAME',
@@ -3734,7 +3748,9 @@ async function loadAiProviderPresets() {
         ),
       }))
       .filter((item) =>
-        ['openai', 'ollama', 'custom', 'azure'].includes(item.provider)
+        ['openai', 'ollama', 'custom', 'openrouter', 'azure'].includes(
+          item.provider
+        )
       );
   } catch (error) {
     console.warn(
@@ -3754,6 +3770,7 @@ function resolveStoredAiToken(aiProvider) {
     .toLowerCase();
   if (provider === 'ollama') return process.env.OLLAMA_API_KEY || '';
   if (provider === 'custom') return process.env.CUSTOM_API_KEY || '';
+  if (provider === 'openrouter') return process.env.OPENROUTER_API_KEY || '';
   if (provider === 'openai') return process.env.OPENAI_API_KEY || '';
   if (provider === 'azure') return process.env.AZURE_API_KEY || '';
   return '';
@@ -3827,6 +3844,7 @@ async function validateAiConnectionForSetup({
   token,
   model,
   azureApiVersion,
+  zdr,
   setupValidationTimeoutMs,
 }) {
   return setupService.withTemporaryValidationTimeout(
@@ -3841,7 +3859,9 @@ async function validateAiConnectionForSetup({
 
       if (
         !provider ||
-        !['openai', 'ollama', 'custom', 'azure'].includes(provider)
+        !['openai', 'ollama', 'custom', 'openrouter', 'azure'].includes(
+          provider
+        )
       ) {
         return {
           success: false,
@@ -3863,6 +3883,44 @@ async function validateAiConnectionForSetup({
           message: valid
             ? 'OpenAI credentials are valid.'
             : 'OpenAI test failed. Check token and network access.',
+        };
+      }
+
+      if (provider === 'openrouter') {
+        if (!normalizedToken) {
+          return {
+            success: false,
+            message: 'An API token is required for OpenRouter.',
+          };
+        }
+        if (!normalizedModel) {
+          return {
+            success: false,
+            message: 'Model is required for OpenRouter.',
+          };
+        }
+
+        const detection = await setupService.detectAiApiUrlForSetup({
+          provider,
+          apiUrl: normalizedApiUrl,
+          apiKey: normalizedToken,
+        });
+        const resolvedApiUrl = String(
+          detection?.resolvedApiUrl || normalizedApiUrl || ''
+        ).trim();
+
+        const valid = await setupService.validateOpenRouterAiConfig(
+          normalizedToken,
+          normalizedModel,
+          resolvedApiUrl,
+          zdr
+        );
+        return {
+          success: valid,
+          resolvedApiUrl,
+          message: valid
+            ? 'OpenRouter credentials are valid.'
+            : 'OpenRouter test failed. Check token, model, and Zero Data Retention setting.',
         };
       }
 
@@ -4036,6 +4094,7 @@ async function discoverAiModelsForSetup({
   aiProvider,
   apiUrl,
   token,
+  zdr,
   setupValidationTimeoutMs,
 }) {
   return setupService.withTemporaryValidationTimeout(
@@ -4088,6 +4147,7 @@ async function discoverAiModelsForSetup({
         provider,
         apiUrl: resolvedApiUrl,
         apiKey: normalizedToken,
+        zdr,
       });
 
       return {
@@ -4260,6 +4320,7 @@ function sanitizeConfigForBootstrap(config) {
     'OPENAI_API_KEY',
     'OLLAMA_API_KEY',
     'CUSTOM_API_KEY',
+    'OPENROUTER_API_KEY',
     'AZURE_API_KEY',
     'OCR_API_KEY',
     'MISTRAL_API_KEY',
@@ -4335,6 +4396,9 @@ router.get('/setup', async (req, res) => {
       AZURE_API_KEY: process.env.AZURE_API_KEY || '',
       AZURE_DEPLOYMENT_NAME: process.env.AZURE_DEPLOYMENT_NAME || '',
       AZURE_API_VERSION: process.env.AZURE_API_VERSION || '',
+      OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || '',
+      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '',
+      OPENROUTER_ZDR: process.env.OPENROUTER_ZDR || 'no',
       MISTRAL_OCR_ENABLED: process.env.MISTRAL_OCR_ENABLED || 'no',
       OCR_PROVIDER: process.env.OCR_PROVIDER || 'mistral',
       OCR_API_URL: process.env.OCR_API_URL || '',
@@ -4708,6 +4772,26 @@ router.post(
  *     summary: Test AI provider credentials during setup
  *     tags:
  *       - Setup
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               aiProvider:
+ *                 type: string
+ *                 enum: [openai, ollama, custom, openrouter, azure]
+ *               apiUrl:
+ *                 type: string
+ *               token:
+ *                 type: string
+ *               model:
+ *                 type: string
+ *               azureApiVersion:
+ *                 type: string
+ *               zdr:
+ *                 type: boolean
+ *                 description: OpenRouter-only. Restrict routing to Zero-Data-Retention endpoints.
  *     responses:
  *       200:
  *         description: AI connectivity result returned
@@ -4724,6 +4808,7 @@ router.post('/api/setup/ai/test', express.json(), async (req, res) => {
       token: req.body?.token,
       model: req.body?.model,
       azureApiVersion: req.body?.azureApiVersion,
+      zdr: req.body?.zdr,
       setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
     });
 
@@ -4744,6 +4829,22 @@ router.post('/api/setup/ai/test', express.json(), async (req, res) => {
  *     summary: Discover available AI models during setup
  *     tags:
  *       - Setup
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               aiProvider:
+ *                 type: string
+ *                 enum: [openai, ollama, custom, openrouter, azure]
+ *               apiUrl:
+ *                 type: string
+ *               token:
+ *                 type: string
+ *               zdr:
+ *                 type: boolean
+ *                 description: OpenRouter-only. Limit discovery to Zero-Data-Retention models.
  *     responses:
  *       200:
  *         description: AI model list returned
@@ -4758,6 +4859,7 @@ router.post('/api/setup/ai/models', express.json(), async (req, res) => {
       aiProvider: req.body?.aiProvider,
       apiUrl: req.body?.apiUrl,
       token: req.body?.token,
+      zdr: req.body?.zdr,
       setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
     });
 
@@ -5019,13 +5121,16 @@ router.post(
  *             properties:
  *               aiProvider:
  *                 type: string
- *                 enum: [openai, ollama, custom, azure]
+ *                 enum: [openai, ollama, custom, openrouter, azure]
  *               apiUrl:
  *                 type: string
  *               token:
  *                 type: string
  *               model:
  *                 type: string
+ *               zdr:
+ *                 type: boolean
+ *                 description: OpenRouter-only. Restrict routing to Zero-Data-Retention endpoints.
  *               setupValidationTimeoutMs:
  *                 type: integer
  *     responses:
@@ -5046,6 +5151,7 @@ router.post(
         token: resolveSettingsAiToken(req.body?.aiProvider, req.body?.token),
         model: req.body?.model,
         azureApiVersion: req.body?.azureApiVersion,
+        zdr: req.body?.zdr,
         setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
       });
 
@@ -5099,6 +5205,7 @@ router.post(
         aiProvider: req.body?.aiProvider,
         apiUrl: req.body?.apiUrl,
         token: resolveSettingsAiToken(req.body?.aiProvider, req.body?.token),
+        zdr: req.body?.zdr,
         setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
       });
 
@@ -5333,6 +5440,7 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
     const aiAzureApiVersion =
       String(req.body?.aiAzureApiVersion || '2023-05-15').trim() ||
       '2023-05-15';
+    const aiOpenRouterZdr = parseBooleanInput(req.body?.aiOpenRouterZdr, false);
     const setupValidationTimeoutMs = setupService.normalizeValidationTimeoutMs(
       req.body?.setupValidationTimeoutMs,
       30000
@@ -5427,7 +5535,9 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
 
     if (
       !aiProvider ||
-      !['openai', 'ollama', 'custom', 'azure'].includes(aiProvider)
+      !['openai', 'ollama', 'custom', 'openrouter', 'azure'].includes(
+        aiProvider
+      )
     ) {
       return res.status(400).json({
         success: false,
@@ -5452,6 +5562,7 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
       token: aiToken,
       model: aiModel,
       azureApiVersion: aiAzureApiVersion,
+      zdr: aiOpenRouterZdr,
       setupValidationTimeoutMs,
     });
 
@@ -5536,6 +5647,11 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
       finalConfig.AZURE_API_KEY = aiToken;
       finalConfig.AZURE_DEPLOYMENT_NAME = aiModel;
       finalConfig.AZURE_API_VERSION = aiAzureApiVersion;
+    } else if (aiProvider === 'openrouter') {
+      finalConfig.OPENROUTER_BASE_URL = aiApiUrl;
+      finalConfig.OPENROUTER_API_KEY = aiToken;
+      finalConfig.OPENROUTER_MODEL = aiModel;
+      finalConfig.OPENROUTER_ZDR = aiOpenRouterZdr ? 'yes' : 'no';
     } else {
       finalConfig.CUSTOM_BASE_URL = aiApiUrl;
       finalConfig.CUSTOM_API_KEY = aiToken;
@@ -6652,6 +6768,10 @@ router.get('/settings', async (req, res) => {
     CUSTOM_API_KEY: process.env.CUSTOM_API_KEY || '',
     CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL || '',
     CUSTOM_MODEL: process.env.CUSTOM_MODEL || '',
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
+    OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || '',
+    OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '',
+    OPENROUTER_ZDR: process.env.OPENROUTER_ZDR || 'no',
     AZURE_ENDPOINT: process.env.AZURE_ENDPOINT || '',
     AZURE_API_KEY: process.env.AZURE_API_KEY || '',
     AZURE_DEPLOYMENT_NAME: process.env.AZURE_DEPLOYMENT_NAME || '',
@@ -7535,6 +7655,15 @@ router.post('/manual/analyze', express.json(), async (req, res) => {
         id || []
       );
       return res.json(analyzeDocument);
+    } else if (process.env.AI_PROVIDER === 'openrouter') {
+      const analyzeDocument = await openrouterService.analyzeDocument(
+        content,
+        existingTagsList,
+        existingCorrespondentList,
+        existingDocumentTypesList,
+        id || []
+      );
+      return res.json(analyzeDocument);
     } else if (process.env.AI_PROVIDER === 'azure') {
       const analyzeDocument = await azureService.analyzeDocument(
         content,
@@ -7660,6 +7789,18 @@ router.post('/manual/playground', express.json(), async (req, res) => {
       return res.json(analyzeDocument);
     } else if (process.env.AI_PROVIDER === 'custom') {
       const analyzeDocument = await customService.analyzePlayground(
+        content,
+        prompt
+      );
+      await documentModel.addOpenAIMetrics(
+        documentId,
+        analyzeDocument.metrics.promptTokens,
+        analyzeDocument.metrics.completionTokens,
+        analyzeDocument.metrics.totalTokens
+      );
+      return res.json(analyzeDocument);
+    } else if (process.env.AI_PROVIDER === 'openrouter') {
+      const analyzeDocument = await openrouterService.analyzePlayground(
         content,
         prompt
       );
@@ -8161,6 +8302,9 @@ router.post('/settings', express.json(), async (req, res) => {
       customApiKey,
       customBaseUrl,
       customModel,
+      openrouterKey,
+      openrouterModel,
+      openrouterZdr,
       activateTagging,
       activateCorrespondents,
       activateDocumentType,
@@ -8233,6 +8377,10 @@ router.post('/settings', express.json(), async (req, res) => {
       CUSTOM_API_KEY: process.env.CUSTOM_API_KEY || '',
       CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL || '',
       CUSTOM_MODEL: process.env.CUSTOM_MODEL || '',
+      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
+      OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || '',
+      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '',
+      OPENROUTER_ZDR: process.env.OPENROUTER_ZDR || 'no',
       ACTIVATE_TAGGING: process.env.ACTIVATE_TAGGING || 'yes',
       ACTIVATE_CORRESPONDENTS: process.env.ACTIVATE_CORRESPONDENTS || 'yes',
       ACTIVATE_DOCUMENT_TYPE: process.env.ACTIVATE_DOCUMENT_TYPE || 'yes',
@@ -8313,6 +8461,10 @@ router.post('/settings', express.json(), async (req, res) => {
     const effectiveCustomApiKey = hasCustomApiKeyInput
       ? customApiKey.trim()
       : currentConfig.CUSTOM_API_KEY;
+    const hasOpenrouterKeyInput = hasValue(openrouterKey);
+    const effectiveOpenrouterKey = hasOpenrouterKeyInput
+      ? openrouterKey.trim()
+      : currentConfig.OPENROUTER_API_KEY;
     const hasAzureApiKeyInput = hasValue(azureApiKey);
     const effectiveAzureApiKey = hasAzureApiKeyInput
       ? azureApiKey.trim()
@@ -8526,6 +8678,20 @@ router.post('/settings', express.json(), async (req, res) => {
           updatedConfig.CUSTOM_API_KEY = effectiveCustomApiKey;
         if (customBaseUrl) updatedConfig.CUSTOM_BASE_URL = customBaseUrl;
         if (customModel) updatedConfig.CUSTOM_MODEL = customModel;
+      } else if (selectedAiProvider === 'openrouter') {
+        const effectiveOpenrouterModel =
+          openrouterModel || currentConfig.OPENROUTER_MODEL;
+
+        if (!effectiveOpenrouterKey || !effectiveOpenrouterModel) {
+          return res.status(400).json({
+            error:
+              'OpenRouter API key and model are required when OpenRouter provider is selected.',
+          });
+        }
+
+        if (hasOpenrouterKeyInput)
+          updatedConfig.OPENROUTER_API_KEY = effectiveOpenrouterKey;
+        if (openrouterModel) updatedConfig.OPENROUTER_MODEL = openrouterModel;
       } else if (selectedAiProvider === 'azure') {
         const effectiveAzureEndpoint =
           azureEndpoint || currentConfig.AZURE_ENDPOINT;
@@ -8688,6 +8854,12 @@ router.post('/settings', express.json(), async (req, res) => {
       const normalizedOcrOpenRouterZdr = ocrOpenRouterZdr.trim().toLowerCase();
       if (['yes', 'no'].includes(normalizedOcrOpenRouterZdr)) {
         updatedConfig.OCR_OPENROUTER_ZDR = normalizedOcrOpenRouterZdr;
+      }
+    }
+    if (typeof openrouterZdr === 'string') {
+      const normalizedOpenrouterZdr = openrouterZdr.trim().toLowerCase();
+      if (['yes', 'no'].includes(normalizedOpenrouterZdr)) {
+        updatedConfig.OPENROUTER_ZDR = normalizedOpenrouterZdr;
       }
     }
     updatedConfig.SETUP_OCR_VALIDATION_TIMEOUT_MS = String(
@@ -9065,6 +9237,7 @@ router.get('/about', protectApiRoute, async (req, res) => {
       ollamaModel: configFile.ollama?.model || 'unknown',
       customBaseUrl: configFile.custom?.apiUrl || 'unknown',
       customModel: configFile.custom?.model || 'unknown',
+      openrouterModel: configFile.openRouter?.model || 'unknown',
       azureEndpoint: configFile.azure?.endpoint || 'unknown',
       azureDeploymentName: configFile.azure?.deploymentName || 'unknown',
       azureApiVersion: configFile.azure?.apiVersion || 'unknown',
@@ -9083,6 +9256,7 @@ router.get('/about', protectApiRoute, async (req, res) => {
       paperlessTokenSet: Boolean(configFile.paperless?.apiToken),
       openAiKeySet: Boolean(configFile.openai?.apiKey),
       customKeySet: Boolean(configFile.custom?.apiKey),
+      openrouterKeySet: Boolean(configFile.openRouter?.apiKey),
       azureKeySet: Boolean(configFile.azure?.apiKey),
       mistralKeySet: Boolean(configFile.mistralOcr?.apiKey),
       apiKeySet: Boolean(configFile.getApiKey && configFile.getApiKey()),
@@ -9114,6 +9288,7 @@ router.get('/about', protectApiRoute, async (req, res) => {
         ollamaModel: configFile.ollama?.model || 'unknown',
         customBaseUrl: configFile.custom?.apiUrl || 'unknown',
         customModel: configFile.custom?.model || 'unknown',
+        openrouterModel: configFile.openRouter?.model || 'unknown',
         azureEndpoint: configFile.azure?.endpoint || 'unknown',
         azureDeploymentName: configFile.azure?.deploymentName || 'unknown',
         azureApiVersion: configFile.azure?.apiVersion || 'unknown',

@@ -154,6 +154,7 @@ class FormManager {
     const openaiSettings = document.getElementById('openaiSettings');
     const ollamaSettings = document.getElementById('ollamaSettings');
     const customSettings = document.getElementById('customSettings');
+    const openrouterSettings = document.getElementById('openrouterSettings');
     const azureSettings = document.getElementById('azureSettings');
 
     // Get all provider-specific fields
@@ -163,6 +164,7 @@ class FormManager {
     const customBaseUrl = document.getElementById('customBaseUrl');
     const customApiKey = document.getElementById('customApiKey');
     const customModel = document.getElementById('customModel');
+    const openrouterModel = document.getElementById('openrouterModel');
     const azureApiKey = document.getElementById('azureApiKey');
     const azureEndpoint = document.getElementById('azureEndpoint');
     const azureDeploymentName = document.getElementById('azureDeploymentName');
@@ -172,6 +174,7 @@ class FormManager {
       !openaiSettings ||
       !ollamaSettings ||
       !customSettings ||
+      !openrouterSettings ||
       !azureSettings
     ) {
       return;
@@ -181,6 +184,7 @@ class FormManager {
     openaiSettings.classList.add('hidden');
     ollamaSettings.classList.add('hidden');
     customSettings.classList.add('hidden');
+    openrouterSettings.classList.add('hidden');
     azureSettings.classList.add('hidden');
 
     // Reset all required fields
@@ -190,6 +194,7 @@ class FormManager {
     customBaseUrl.required = false;
     customApiKey.required = false;
     customModel.required = false;
+    openrouterModel.required = false;
     azureApiKey.required = false;
     azureEndpoint.required = false;
     azureDeploymentName.required = false;
@@ -209,6 +214,10 @@ class FormManager {
         customSettings.classList.remove('hidden');
         customBaseUrl.required = true;
         customModel.required = true;
+        break;
+      case 'openrouter':
+        openrouterSettings.classList.remove('hidden');
+        openrouterModel.required = true;
         break;
       case 'azure':
         azureSettings.classList.remove('hidden');
@@ -533,9 +542,15 @@ function initializeFormHandlers() {
   const customBaseUrlInput = document.getElementById('customBaseUrl');
   const customApiKeyInput = document.getElementById('customApiKey');
   const customModelInput = document.getElementById('customModel');
+  const openrouterKeyInput = document.getElementById('openrouterKey');
+  const openrouterModelInput = document.getElementById('openrouterModel');
+  const openrouterZdrInput = document.getElementById('openrouterZdr');
   const fetchAiModelsBtn = document.getElementById('fetchAiModelsBtn');
   const fetchCustomAiModelsBtn = document.getElementById(
     'fetchCustomAiModelsBtn'
+  );
+  const fetchOpenrouterAiModelsBtn = document.getElementById(
+    'fetchOpenrouterAiModelsBtn'
   );
 
   const ocrEnabledSelect = document.getElementById('mistralOcrEnabled');
@@ -553,6 +568,9 @@ function initializeFormHandlers() {
   const testOcrBtn = document.getElementById('testOcrBtn');
   const ocrTestState = document.getElementById('ocrTestState');
   const openRouterConnectBtn = document.getElementById('openRouterConnectBtn');
+  const openRouterAiConnectBtn = document.getElementById(
+    'openRouterAiConnectBtn'
+  );
 
   const setButtonLoading = (button, loading, loadingText = 'Loading...') => {
     if (!button) return;
@@ -657,6 +675,13 @@ function initializeFormHandlers() {
         ).trim(),
       };
     }
+    if (provider === 'openrouter') {
+      return {
+        provider,
+        apiUrl: 'https://openrouter.ai/api/v1',
+        model: String(openrouterModelInput?.value || '').trim(),
+      };
+    }
 
     return {
       provider: 'custom',
@@ -742,6 +767,13 @@ function initializeFormHandlers() {
         azureEndpoint.value = String(preset.apiUrl || '').trim();
       if (azureDeploymentName)
         azureDeploymentName.value = String(preset.model || '').trim();
+    } else if (provider === 'openrouter') {
+      if (openrouterModelInput)
+        openrouterModelInput.value = String(preset.model || '').trim();
+      if (openrouterKeyInput) {
+        openrouterKeyInput.placeholder =
+          preset.tokenPlaceholder || openrouterKeyInput.placeholder;
+      }
     }
 
     if (aiPresetHint) {
@@ -983,6 +1015,66 @@ function initializeFormHandlers() {
         });
       } finally {
         setButtonLoading(fetchCustomAiModelsBtn, false);
+      }
+    });
+  }
+
+  if (fetchOpenrouterAiModelsBtn) {
+    fetchOpenrouterAiModelsBtn.addEventListener('click', async () => {
+      const provider = String(
+        aiProviderSelect?.value || 'openrouter'
+      ).toLowerCase();
+      const apiUrl = 'https://openrouter.ai/api/v1';
+      const token = String(openrouterKeyInput?.value || '').trim();
+
+      if (provider !== 'openrouter') {
+        await Swal.fire({
+          icon: 'info',
+          title: 'Switch provider',
+          text: 'Use this button with AI Provider set to OpenRouter.',
+        });
+        return;
+      }
+
+      setButtonLoading(fetchOpenrouterAiModelsBtn, true);
+      try {
+        const result = await fetchModels('/api/settings/ai/models', {
+          aiProvider: provider,
+          apiUrl,
+          token,
+          zdr: openrouterZdrInput?.value === 'yes',
+        });
+        const models = result.models;
+
+        populateModelSelect(
+          openrouterModelInput,
+          models,
+          'Select OpenRouter model'
+        );
+        await Swal.fire({
+          icon: 'success',
+          title: 'Models loaded',
+          text:
+            models.length > 0
+              ? `Found ${models.length} model(s).`
+              : 'No models found.',
+        });
+        refreshAiPresetSelection();
+      } catch (error) {
+        const errorDetails = getTimeoutAwareErrorDetails(
+          'AI model discovery',
+          error,
+          null
+        );
+        await Swal.fire({
+          icon: 'error',
+          title: errorDetails.isTimeout
+            ? 'AI timeout reached'
+            : 'Loading failed',
+          text: errorDetails.message,
+        });
+      } finally {
+        setButtonLoading(fetchOpenrouterAiModelsBtn, false);
       }
     });
   }
@@ -1738,7 +1830,7 @@ function initializeFormHandlers() {
       .replace(/=+$/, '');
   };
 
-  if (openRouterConnectBtn) {
+  if (openRouterConnectBtn || openRouterAiConnectBtn) {
     const handleOpenRouterCode = async (code) => {
       const stored = sessionStorage.getItem('openrouterOauth');
       sessionStorage.removeItem('openrouterOauth');
@@ -1751,8 +1843,11 @@ function initializeFormHandlers() {
         return;
       }
 
-      const { verifier: storedVerifier, method: storedMethod } =
-        JSON.parse(stored);
+      const {
+        verifier: storedVerifier,
+        method: storedMethod,
+        target: storedTarget,
+      } = JSON.parse(stored);
 
       try {
         const response = await fetch(
@@ -1777,14 +1872,25 @@ function initializeFormHandlers() {
           );
         }
 
-        if (ocrApiKeyInput) {
-          ocrApiKeyInput.value = result.data.key;
+        if (storedTarget === 'ai') {
+          if (openrouterKeyInput) {
+            openrouterKeyInput.value = result.data.key;
+          }
+          if (aiProviderSelect) {
+            aiProviderSelect.value = 'openrouter';
+            aiProviderSelect.dispatchEvent(new Event('change'));
+          }
+          refreshAiPresetSelection();
+        } else {
+          if (ocrApiKeyInput) {
+            ocrApiKeyInput.value = result.data.key;
+          }
+          if (ocrProviderSelect) {
+            ocrProviderSelect.value = 'openrouter';
+          }
+          toggleOcrFields();
+          setOcrTestPill('default', 'Not tested');
         }
-        if (ocrProviderSelect) {
-          ocrProviderSelect.value = 'openrouter';
-        }
-        toggleOcrFields();
-        setOcrTestPill('default', 'Not tested');
 
         await Swal.fire({
           icon: 'success',
@@ -1822,12 +1928,12 @@ function initializeFormHandlers() {
       }
     });
 
-    openRouterConnectBtn.addEventListener('click', async () => {
+    const startOpenRouterConnect = async (button, target) => {
       // OpenRouter registers/updates an "app" record keyed by callback_url
       // on every /auth visit; firing two requests for the same callback_url
       // in quick succession (e.g. a double click) can race on that record
       // and returns a 409 from OpenRouter. Guard against that here.
-      if (openRouterConnectBtn.disabled) return;
+      if (button.disabled) return;
 
       // OpenRouter's docs only document localhost (any port) as a supported
       // non-HTTPS callback_url; a private LAN IP over plain HTTP (the common
@@ -1849,7 +1955,7 @@ function initializeFormHandlers() {
         return;
       }
 
-      setButtonLoading(openRouterConnectBtn, true, 'Connecting...');
+      setButtonLoading(button, true, 'Connecting...');
 
       const verifierBytes = crypto.getRandomValues(new Uint8Array(64));
       const verifier = base64UrlEncode(verifierBytes);
@@ -1870,7 +1976,7 @@ function initializeFormHandlers() {
 
       sessionStorage.setItem(
         'openrouterOauth',
-        JSON.stringify({ verifier, method })
+        JSON.stringify({ verifier, method, target })
       );
 
       const callbackUrl = `${window.location.origin}/openrouter/callback`;
@@ -1889,7 +1995,7 @@ function initializeFormHandlers() {
       );
 
       if (!popup) {
-        setButtonLoading(openRouterConnectBtn, false);
+        setButtonLoading(button, false);
         await Swal.fire({
           icon: 'error',
           title: 'Popup blocked',
@@ -1898,8 +2004,20 @@ function initializeFormHandlers() {
         return;
       }
 
-      setButtonLoading(openRouterConnectBtn, false);
-    });
+      setButtonLoading(button, false);
+    };
+
+    if (openRouterConnectBtn) {
+      openRouterConnectBtn.addEventListener('click', () =>
+        startOpenRouterConnect(openRouterConnectBtn, 'ocr')
+      );
+    }
+
+    if (openRouterAiConnectBtn) {
+      openRouterAiConnectBtn.addEventListener('click', () =>
+        startOpenRouterConnect(openRouterAiConnectBtn, 'ai')
+      );
+    }
   }
 
   toggleOcrFields();
@@ -3235,6 +3353,9 @@ function initializeRuntimeOverridePills() {
     { selector: '#customBaseUrl', envKey: 'CUSTOM_BASE_URL' },
     { selector: '#customApiKey', envKey: 'CUSTOM_API_KEY' },
     { selector: '#customModel', envKey: 'CUSTOM_MODEL' },
+    { selector: '#openrouterKey', envKey: 'OPENROUTER_API_KEY' },
+    { selector: '#openrouterModel', envKey: 'OPENROUTER_MODEL' },
+    { selector: '#openrouterZdr', envKey: 'OPENROUTER_ZDR' },
     { selector: '#azureEndpoint', envKey: 'AZURE_ENDPOINT' },
     { selector: '#azureApiKey', envKey: 'AZURE_API_KEY' },
     { selector: '#azureDeploymentName', envKey: 'AZURE_DEPLOYMENT_NAME' },

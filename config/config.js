@@ -431,6 +431,16 @@ module.exports = {
     apiKey: process.env.CUSTOM_API_KEY || '',
     model: process.env.CUSTOM_MODEL || '',
   },
+  openRouter: {
+    apiUrl: (
+      process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+    ).trim(),
+    apiKey: process.env.OPENROUTER_API_KEY || '',
+    model: process.env.OPENROUTER_MODEL || '',
+    // Restrict chat routing and model discovery to Zero-Data-Retention
+    // endpoints (AI analysis path; the OCR path has its own switch).
+    zdr: parseEnvBoolean(process.env.OPENROUTER_ZDR, 'no'),
+  },
   azure: {
     apiKey: process.env.AZURE_API_KEY || '',
     endpoint: process.env.AZURE_ENDPOINT || '',

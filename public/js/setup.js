@@ -107,6 +107,10 @@ class SetupWizard {
         this.aiValidationTimeout = document.getElementById('aiValidationTimeout');
         this.testAiBtn = document.getElementById('testAiBtn');
         this.aiTestStatePill = document.getElementById('aiTestState');
+        this.aiOpenRouterZdr = document.getElementById('aiOpenRouterZdr');
+        this.aiOpenRouterZdrRow = document.getElementById('aiOpenRouterZdrRow');
+        this.aiOpenRouterConnectRow = document.getElementById('aiOpenRouterConnectRow');
+        this.aiOpenRouterConnectBtn = document.getElementById('aiOpenRouterConnectBtn');
 
         this.aiModeQuickstartBtn = document.getElementById('aiModeQuickstartBtn');
         this.aiModeManualBtn = document.getElementById('aiModeManualBtn');
@@ -226,6 +230,14 @@ class SetupWizard {
             this.setModelSelectOptions(this.aiModel, [this.config.AZURE_DEPLOYMENT_NAME || ''], 'Select model');
             this.aiModel.value = this.config.AZURE_DEPLOYMENT_NAME || '';
             this.aiToken.value = this.config.AZURE_API_KEY || '';
+        } else if (provider === 'openrouter') {
+            this.aiApiUrl.value = this.config.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+            this.setModelSelectOptions(this.aiModel, [this.config.OPENROUTER_MODEL || ''], 'Select model');
+            this.aiModel.value = this.config.OPENROUTER_MODEL || '';
+            this.aiToken.value = this.config.OPENROUTER_API_KEY || '';
+            if (this.aiOpenRouterZdr) {
+                this.aiOpenRouterZdr.value = this.config.OPENROUTER_ZDR || 'no';
+            }
         } else {
             this.aiProvider.value = 'custom';
             this.aiApiUrl.value = this.config.CUSTOM_BASE_URL || '';
@@ -233,6 +245,8 @@ class SetupWizard {
             this.aiModel.value = this.config.CUSTOM_MODEL || '';
             this.aiToken.value = this.config.CUSTOM_API_KEY || '';
         }
+
+        this.toggleAiOpenRouterFields();
     }
 
     findMatchingPreset() {
@@ -388,7 +402,10 @@ class SetupWizard {
             this.fetchOcrModelsBtn.addEventListener('click', () => this.fetchOcrModels());
         }
         if (this.openRouterConnectBtn) {
-            this.openRouterConnectBtn.addEventListener('click', () => this.connectOpenRouter());
+            this.openRouterConnectBtn.addEventListener('click', () => this.connectOpenRouter('ocr'));
+        }
+        if (this.aiOpenRouterConnectBtn) {
+            this.aiOpenRouterConnectBtn.addEventListener('click', () => this.connectOpenRouter('ai'));
         }
         window.addEventListener('message', (event) => this.handleOpenRouterOauthMessage(event));
         window.addEventListener('storage', (event) => this.handleOpenRouterOauthStorage(event));
@@ -730,12 +747,14 @@ class SetupWizard {
         return { verifier, challenge: verifier, method: 'plain' };
     }
 
-    async connectOpenRouter() {
+    async connectOpenRouter(target = 'ocr') {
+        const button = target === 'ai' ? this.aiOpenRouterConnectBtn : this.openRouterConnectBtn;
+
         // OpenRouter registers/updates an "app" record keyed by callback_url
         // on every /auth visit; firing two requests for the same callback_url
         // in quick succession (e.g. a double click) can race on that record
         // and returns a 409 from OpenRouter. Guard against that here.
-        if (this.openRouterConnectBtn.disabled) return;
+        if (button.disabled) return;
 
         // OpenRouter's docs only document localhost (any port) as a supported
         // non-HTTPS callback_url; a private LAN IP over plain HTTP (the common
@@ -754,16 +773,16 @@ class SetupWizard {
             return;
         }
 
-        this.setButtonLoading(this.openRouterConnectBtn, true, 'Connecting...');
+        this.setButtonLoading(button, true, 'Connecting...');
 
         const { verifier, challenge, method } = await this.buildOpenRouterPkce();
-        sessionStorage.setItem('openrouterOauth', JSON.stringify({ verifier, method }));
+        sessionStorage.setItem('openrouterOauth', JSON.stringify({ verifier, method, target }));
 
         const callbackUrl = `${window.location.origin}/openrouter/callback`;
         const authUrl = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callbackUrl)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=${method}`;
         const popup = window.open(authUrl, 'openrouter-oauth', 'width=600,height=750');
 
-        this.setButtonLoading(this.openRouterConnectBtn, false);
+        this.setButtonLoading(button, false);
 
         if (!popup) {
             await this.showPopup({ icon: 'warning', title: 'Popup blocked', text: 'Please allow popups for this site and try again.' });
@@ -805,7 +824,7 @@ class SetupWizard {
             return;
         }
 
-        const { verifier, method } = JSON.parse(stored);
+        const { verifier, method, target } = JSON.parse(stored);
 
         try {
             const result = await this.request('/api/setup/openrouter/oauth/exchange', {
@@ -814,12 +833,21 @@ class SetupWizard {
                 codeChallengeMethod: method
             });
 
-            this.ocrApiKey.value = result.data.key;
-            if (this.ocrProvider.value !== 'openrouter') {
-                this.ocrProvider.value = 'openrouter';
+            if (target === 'ai') {
+                this.aiToken.value = result.data.key;
+                if (this.aiProvider.value !== 'openrouter') {
+                    this.aiProvider.value = 'openrouter';
+                }
+                this.toggleAiOpenRouterFields();
+                this.setPillState(this.aiTestStatePill, '', 'Not tested');
+            } else {
+                this.ocrApiKey.value = result.data.key;
+                if (this.ocrProvider.value !== 'openrouter') {
+                    this.ocrProvider.value = 'openrouter';
+                }
+                this.toggleMistralFields();
+                this.setPillState(this.ocrTestStatePill, '', 'Not tested');
             }
-            this.toggleMistralFields();
-            this.setPillState(this.ocrTestStatePill, '', 'Not tested');
             await this.showPopup({ icon: 'success', title: 'OpenRouter connected', text: 'Key created — continue through the wizard to save it.' });
         } catch (error) {
             await this.showPopup({ icon: 'error', title: 'OpenRouter connection failed', text: error.message });
@@ -1069,6 +1097,7 @@ class SetupWizard {
         if (!preset) {
             this.aiProvider.value = 'custom';
             this.aiPresetHint.textContent = 'Manual mode: choose provider and enter values yourself. Token is optional for custom endpoints.';
+            this.toggleAiOpenRouterFields();
             return;
         }
 
@@ -1077,6 +1106,17 @@ class SetupWizard {
         this.aiModel.value = preset.model || '';
         this.aiToken.placeholder = preset.tokenPlaceholder || 'Enter API token if required';
         this.aiPresetHint.textContent = `Preset "${preset.label}" selected.${this.aiProvider.value === 'custom' ? ' Token can stay empty if your endpoint allows anonymous access.' : ''}`;
+        this.toggleAiOpenRouterFields();
+    }
+
+    toggleAiOpenRouterFields() {
+        const isOpenRouter = String(this.aiProvider.value || '').trim().toLowerCase() === 'openrouter';
+        if (this.aiOpenRouterZdrRow) {
+            this.aiOpenRouterZdrRow.classList.toggle('hidden', !isOpenRouter);
+        }
+        if (this.aiOpenRouterConnectRow) {
+            this.aiOpenRouterConnectRow.classList.toggle('hidden', !isOpenRouter);
+        }
     }
 
     setAiConfigMode(mode) {
@@ -1201,6 +1241,7 @@ class SetupWizard {
             this.setModelSelectOptions(this.aiModel, [selectedAiModel], 'Select model');
             this.aiModel.value = selectedAiModel;
         }
+        this.toggleAiOpenRouterFields();
 
         // Changed values invalidate a previous AI connection test; an
         // idempotent re-apply (e.g. during finalize re-validation) must not.
@@ -1281,6 +1322,7 @@ class SetupWizard {
             apiUrl: this.aiApiUrl.value.trim(),
             token: this.aiToken.value.trim(),
             model: this.aiModel.value.trim(),
+            zdr: this.aiOpenRouterZdr?.value === 'yes',
             setupValidationTimeoutMs: this.getAiValidationTimeoutMs()
         };
 
@@ -1422,6 +1464,7 @@ class SetupWizard {
             aiProvider: this.aiProvider.value.trim().toLowerCase(),
             apiUrl: this.aiApiUrl.value.trim(),
             token: this.aiToken.value.trim(),
+            zdr: this.aiOpenRouterZdr?.value === 'yes',
             setupValidationTimeoutMs: this.getAiValidationTimeoutMs()
         };
 
@@ -1432,7 +1475,7 @@ class SetupWizard {
             return [];
         }
 
-        if (!['openai', 'azure'].includes(payload.aiProvider) && !payload.apiUrl) {
+        if (!['openai', 'azure', 'openrouter'].includes(payload.aiProvider) && !payload.apiUrl) {
             if (!silent) {
                 await this.showPopup({ icon: 'warning', title: 'API URL missing', text: 'Enter API URL first.' });
             }
@@ -1538,6 +1581,7 @@ class SetupWizard {
             apiUrl: this.aiApiUrl.value.trim(),
             token: this.aiToken.value.trim(),
             model: this.aiModel.value.trim(),
+            zdr: this.aiOpenRouterZdr?.value === 'yes',
             setupValidationTimeoutMs: this.getAiValidationTimeoutMs()
         };
 
@@ -1708,7 +1752,7 @@ class SetupWizard {
             }
 
             const provider = this.aiProvider.value.trim().toLowerCase();
-            const tokenRequired = provider === 'openai' || provider === 'azure';
+            const tokenRequired = provider === 'openai' || provider === 'azure' || provider === 'openrouter';
             if (tokenRequired && !this.aiToken.value.trim()) {
                 await this.showPopup({ icon: 'warning', title: 'Token required', text: `Token is required for provider ${provider}.` });
                 return false;
@@ -1788,6 +1832,11 @@ class SetupWizard {
             preview.push(`AZURE_API_KEY=${this.aiToken.value.trim()}`);
             preview.push(`AZURE_DEPLOYMENT_NAME=${this.aiModel.value.trim()}`);
             preview.push('AZURE_API_VERSION=2023-05-15');
+        } else if (provider === 'openrouter') {
+            preview.push(`OPENROUTER_BASE_URL=${this.aiApiUrl.value.trim()}`);
+            preview.push(`OPENROUTER_API_KEY=${this.aiToken.value.trim()}`);
+            preview.push(`OPENROUTER_MODEL=${this.aiModel.value.trim()}`);
+            preview.push(`OPENROUTER_ZDR=${this.aiOpenRouterZdr?.value === 'yes' ? 'yes' : 'no'}`);
         } else {
             preview.push(`CUSTOM_BASE_URL=${this.aiApiUrl.value.trim()}`);
             preview.push(`CUSTOM_API_KEY=${this.aiToken.value.trim()}`);
@@ -1844,6 +1893,7 @@ class SetupWizard {
             aiApiUrl: this.aiApiUrl.value.trim(),
             aiToken: this.aiToken.value.trim(),
             aiModel: this.aiModel.value.trim(),
+            aiOpenRouterZdr: this.aiOpenRouterZdr?.value || 'no',
             setupValidationTimeoutMs: this.getAiValidationTimeoutMs(),
             setupOcrValidationTimeoutMs: this.getOcrValidationTimeoutMs(),
             allowFailedPaperlessTest: this.paperlessTestState.allowFailure,

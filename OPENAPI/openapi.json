@@ -2557,6 +2557,43 @@
         "tags": [
           "Setup"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "aiProvider": {
+                    "type": "string",
+                    "enum": [
+                      "openai",
+                      "ollama",
+                      "custom",
+                      "openrouter",
+                      "azure"
+                    ]
+                  },
+                  "apiUrl": {
+                    "type": "string"
+                  },
+                  "token": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "azureApiVersion": {
+                    "type": "string"
+                  },
+                  "zdr": {
+                    "type": "boolean",
+                    "description": "OpenRouter-only. Restrict routing to Zero-Data-Retention endpoints."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "AI connectivity result returned"
@@ -2570,6 +2607,37 @@
         "tags": [
           "Setup"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "aiProvider": {
+                    "type": "string",
+                    "enum": [
+                      "openai",
+                      "ollama",
+                      "custom",
+                      "openrouter",
+                      "azure"
+                    ]
+                  },
+                  "apiUrl": {
+                    "type": "string"
+                  },
+                  "token": {
+                    "type": "string"
+                  },
+                  "zdr": {
+                    "type": "boolean",
+                    "description": "OpenRouter-only. Limit discovery to Zero-Data-Retention models."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "AI model list returned"
@@ -2786,6 +2854,7 @@
                       "openai",
                       "ollama",
                       "custom",
+                      "openrouter",
                       "azure"
                     ]
                   },
@@ -2797,6 +2866,10 @@
                   },
                   "model": {
                     "type": "string"
+                  },
+                  "zdr": {
+                    "type": "boolean",
+                    "description": "OpenRouter-only. Restrict routing to Zero-Data-Retention endpoints."
                   },
                   "setupValidationTimeoutMs": {
                     "type": "integer"

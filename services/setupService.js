@@ -73,7 +73,9 @@ class SetupService {
       AZURE_API_KEY: process.env.AZURE_API_KEY || '',
       AZURE_DEPLOYMENT_NAME: process.env.AZURE_DEPLOYMENT_NAME || '',
       CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL || '',
-      CUSTOM_MODEL: process.env.CUSTOM_MODEL || ''
+      CUSTOM_MODEL: process.env.CUSTOM_MODEL || '',
+      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
+      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '',
     };
   }
 
@@ -387,7 +389,60 @@ class SetupService {
     }
   }
 
+  async validateOpenRouterAiConfig(apiKey, model, apiUrl = '', zdr = 'no') {
+    if (!apiKey) {
+      console.error('OpenRouter AI validation error: missing API key');
+      return false;
+    }
+    if (!model) {
+      console.error('OpenRouter AI validation error: missing model');
+      return false;
+    }
 
+    for (const url of this.buildVersionedApiUrlCandidates(
+      apiUrl,
+      'https://openrouter.ai/api/v1',
+      true
+    )) {
+      const urlValidation = await validateApiUrl(
+        url,
+        this.getOpenRouterUrlValidationOptions(url)
+      );
+      if (!urlValidation.valid) {
+        console.error(
+          'OpenRouter AI URL validation error:',
+          urlValidation.error
+        );
+        continue;
+      }
+
+      try {
+        const openai = new OpenAI({
+          apiKey,
+          baseURL: url,
+          timeout: this.getValidationTimeoutMs(),
+        });
+        const completion = await this.withValidationTimeout(
+          openai.chat.completions.create({
+            messages: [{ role: 'user', content: 'Test' }],
+            model,
+            // Validate the actual routing the scan loop will use: with ZDR
+            // enabled, a model without Zero-Data-Retention endpoints must
+            // fail here rather than at processing time.
+            ...(this.isYesFlag(zdr) ? { provider: { zdr: true } } : {}),
+          }),
+          'OpenRouter AI validation'
+        );
+        if (completion.choices && completion.choices.length > 0) {
+          return true;
+        }
+      } catch (error) {
+        console.error('OpenRouter AI validation error:', error.message);
+      }
+    }
+
+    return false;
+  }
 
   async validateOllamaConfig(url, model, apiKey = '') {
     try {
@@ -544,6 +599,58 @@ class SetupService {
     return this.extractOpenRouterVisionModelIds(response.data);
   }
 
+  // Defense in depth for the AI-analysis model list: the request already
+  // asked OpenRouter for output_modalities=text, but keep a local check so
+  // image-generation/embedding-only models never reach the AI dropdown.
+  extractOpenRouterTextModelIds(payload) {
+    const candidates = Array.isArray(payload?.data) ? payload.data : [];
+    return candidates
+      .filter((entry) => {
+        const outputModalities = entry?.architecture?.output_modalities;
+        if (!Array.isArray(outputModalities)) {
+          return true;
+        }
+        return outputModalities.includes('text');
+      })
+      .map((entry) => String(entry?.id || '').trim())
+      .filter(Boolean);
+  }
+
+  async fetchOpenRouterChatModels(apiUrl, apiKey = '', options = {}) {
+    const normalizedApiUrl = String(apiUrl || '').replace(/\/+$/, '');
+    const urlValidation = await validateApiUrl(normalizedApiUrl, options);
+    if (!urlValidation.valid) {
+      throw new Error(`Model URL validation failed: ${urlValidation.error}`);
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    const queryParams = new URLSearchParams({
+      output_modalities: 'text',
+      limit: '1000',
+    });
+    if (options.zdr) {
+      queryParams.set('zdr', 'true');
+    }
+
+    const response = await this.withValidationTimeout(
+      axios.get(`${normalizedApiUrl}/models?${queryParams.toString()}`, {
+        headers,
+        timeout: this.getValidationTimeoutMs(),
+      }),
+      'OpenRouter model discovery'
+    );
+
+    if (response.status !== 200) {
+      return [];
+    }
+
+    return this.extractOpenRouterTextModelIds(response.data);
+  }
+
   async fetchOpenAiCompatibleModels(apiUrl, apiKey = '', options = {}) {
     const normalizedApiUrl = String(apiUrl || '').replace(/\/+$/, '');
     const urlValidation = await validateApiUrl(normalizedApiUrl, options);
@@ -652,7 +759,7 @@ class SetupService {
     const apiUrl = String(options.apiUrl || '').trim();
     const apiKey = String(options.apiKey || '').trim();
 
-    if (!provider || !['openai', 'ollama', 'custom', 'azure'].includes(provider)) {
+    if (!provider || !['openai', 'ollama', 'custom', 'openrouter', 'azure'].includes(provider)) {
       throw new Error('A valid AI provider is required for URL detection');
     }
 
@@ -667,6 +774,14 @@ class SetupService {
       const candidates = this.buildVersionedApiUrlCandidates(apiUrl, 'https://api.openai.com/v1', true);
       return {
         resolvedApiUrl: candidates[0] || 'https://api.openai.com/v1',
+        mode: 'openai'
+      };
+    }
+
+    if (provider === 'openrouter') {
+      const candidates = this.buildVersionedApiUrlCandidates(apiUrl, 'https://openrouter.ai/api/v1', true);
+      return {
+        resolvedApiUrl: candidates[0] || 'https://openrouter.ai/api/v1',
         mode: 'openai'
       };
     }
@@ -792,7 +907,7 @@ class SetupService {
     const apiUrl = String(options.apiUrl || '').trim();
     const apiKey = String(options.apiKey || '').trim();
 
-    if (!provider || !['openai', 'ollama', 'custom', 'azure'].includes(provider)) {
+    if (!provider || !['openai', 'ollama', 'custom', 'openrouter', 'azure'].includes(provider)) {
       throw new Error('A valid AI provider is required for model discovery');
     }
 
@@ -803,6 +918,38 @@ class SetupService {
     if (provider === 'openai') {
       const targetUrl = (apiUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
       return this.fetchOpenAiCompatibleModels(targetUrl, apiKey, { allowPrivateIPs: false, allowLocalhost: false });
+    }
+
+    if (provider === 'openrouter') {
+      if (!apiKey) {
+        throw new Error('API key is required for OpenRouter model discovery');
+      }
+
+      const targetUrls = this.buildVersionedApiUrlCandidates(
+        apiUrl,
+        'https://openrouter.ai/api/v1',
+        true
+      );
+      const allModels = [];
+
+      for (const targetUrl of targetUrls) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const models = await this.fetchOpenRouterChatModels(
+            targetUrl,
+            apiKey,
+            {
+              ...this.getOpenRouterUrlValidationOptions(targetUrl),
+              zdr: this.isYesFlag(options.zdr),
+            }
+          );
+          allModels.push(...models);
+        } catch {
+          // Try alternate base URL variant, e.g. with or without /v1.
+        }
+      }
+
+      return this.dedupeModelIds(allModels);
     }
 
     if (!apiUrl) {
@@ -1469,6 +1616,16 @@ class SetupService {
       if (!customValid) {
         throw new Error('Invalid Custom AI configuration');
       }
+    } else if (aiProvider === 'openrouter') {
+      const openrouterValid = await this.validateOpenRouterAiConfig(
+        config.OPENROUTER_API_KEY,
+        config.OPENROUTER_MODEL,
+        config.OPENROUTER_BASE_URL || '',
+        config.OPENROUTER_ZDR || 'no'
+      );
+      if (!openrouterValid) {
+        throw new Error('Invalid OpenRouter configuration');
+      }
     } else if (aiProvider === 'azure') {
       const azureValid = await this.validateAzureConfig(
         config.AZURE_API_KEY,
@@ -1547,6 +1704,13 @@ class SetupService {
 
     if (aiProvider === 'custom') {
       return Boolean(String(config.CUSTOM_BASE_URL || '').trim()) && Boolean(String(config.CUSTOM_MODEL || '').trim());
+    }
+
+    if (aiProvider === 'openrouter') {
+      return (
+        Boolean(String(config.OPENROUTER_API_KEY || '').trim()) &&
+        Boolean(String(config.OPENROUTER_MODEL || '').trim())
+      );
     }
 
     return false;

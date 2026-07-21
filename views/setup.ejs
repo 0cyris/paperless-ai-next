@@ -303,6 +303,21 @@
                                 <label for="aiToken" class="text-sm font-medium">API key</label>
                                 <input id="aiToken" type="password" class="setup-input" placeholder="Enter token if required">
                                 <p class="setup-hint">For Ollama and custom endpoints, this field can stay empty if the API does not require authentication.</p>
+                                <div id="aiOpenRouterConnectRow" class="hidden mt-2">
+                                    <button type="button" id="aiOpenRouterConnectBtn" class="setup-btn setup-btn-warning flex items-center gap-2">
+                                        <i class="fas fa-key"></i>
+                                        <span>Connect OpenRouter account</span>
+                                    </button>
+                                    <p class="setup-hint">Creates an API key in your OpenRouter account via OAuth — no manual copy/paste.</p>
+                                </div>
+                            </div>
+                            <div id="aiOpenRouterZdrRow" class="hidden space-y-2 md:col-span-2">
+                                <label for="aiOpenRouterZdr" class="text-sm font-medium">OpenRouter Zero Data Retention only</label>
+                                <select id="aiOpenRouterZdr" class="setup-input">
+                                    <option value="no" <%= config.OPENROUTER_ZDR === 'yes' ? '' : 'selected' %>>No</option>
+                                    <option value="yes" <%= config.OPENROUTER_ZDR === 'yes' ? 'selected' : '' %>>Yes</option>
+                                </select>
+                                <p class="setup-hint">Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models.</p>
                             </div>
                             <div class="space-y-2 md:col-span-2">
                                 <label for="aiModel" class="text-sm font-medium">Model</label>

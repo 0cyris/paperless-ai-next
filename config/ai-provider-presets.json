@@ -25,6 +25,14 @@
       "tokenPlaceholder": ""
     },
     {
+      "id": "openrouter",
+      "label": "OpenRouter",
+      "provider": "openrouter",
+      "apiUrl": "https://openrouter.ai/api/v1",
+      "model": "",
+      "tokenPlaceholder": "sk-or-v1-..."
+    },
+    {
       "id": "ionos-openai-compatible",
       "label": "IONOS (GDPR compliant)",
       "provider": "custom",
