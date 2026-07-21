@@ -319,6 +319,13 @@
                                 </select>
                                 <p class="setup-hint">Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models.</p>
                             </div>
+                            <div id="aiOpenRouterUserModelsRow" class="hidden space-y-2 md:col-span-2">
+                                <div class="flex items-center gap-2">
+                                    <input type="checkbox" id="aiOpenRouterUserModels">
+                                    <label for="aiOpenRouterUserModels" class="text-sm font-medium">Use my OpenRouter account's model list</label>
+                                </div>
+                                <p class="setup-hint">Filters by your OpenRouter account's provider preferences, privacy settings, and guardrails instead of the public catalog. Not saved — applies only to this fetch.</p>
+                            </div>
                             <div class="space-y-2 md:col-span-2">
                                 <label for="aiModel" class="text-sm font-medium">Model</label>
                                 <div class="flex flex-col sm:flex-row gap-2">

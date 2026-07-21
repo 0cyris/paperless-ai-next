@@ -4095,6 +4095,7 @@ async function discoverAiModelsForSetup({
   apiUrl,
   token,
   zdr,
+  userModels,
   setupValidationTimeoutMs,
 }) {
   return setupService.withTemporaryValidationTimeout(
@@ -4148,6 +4149,7 @@ async function discoverAiModelsForSetup({
         apiUrl: resolvedApiUrl,
         apiKey: normalizedToken,
         zdr,
+        userModels: Boolean(userModels),
       });
 
       return {
@@ -4845,6 +4847,9 @@ router.post('/api/setup/ai/test', express.json(), async (req, res) => {
  *               zdr:
  *                 type: boolean
  *                 description: OpenRouter-only. Limit discovery to Zero-Data-Retention models.
+ *               userModels:
+ *                 type: boolean
+ *                 description: OpenRouter-only. Use GET /models/user (filtered by the account's own provider preferences, privacy settings, and guardrails) instead of the public GET /models catalog. Not persisted; applies only to this discovery request.
  *     responses:
  *       200:
  *         description: AI model list returned
@@ -4860,6 +4865,7 @@ router.post('/api/setup/ai/models', express.json(), async (req, res) => {
       apiUrl: req.body?.apiUrl,
       token: req.body?.token,
       zdr: req.body?.zdr,
+      userModels: req.body?.userModels,
       setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
     });
 
@@ -5206,6 +5212,7 @@ router.post(
         apiUrl: req.body?.apiUrl,
         token: resolveSettingsAiToken(req.body?.aiProvider, req.body?.token),
         zdr: req.body?.zdr,
+        userModels: req.body?.userModels,
         setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
       });
 

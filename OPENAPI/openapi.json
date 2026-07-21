@@ -2632,6 +2632,10 @@
                   "zdr": {
                     "type": "boolean",
                     "description": "OpenRouter-only. Limit discovery to Zero-Data-Retention models."
+                  },
+                  "userModels": {
+                    "type": "boolean",
+                    "description": "OpenRouter-only. Use GET /models/user (filtered by the account's own provider preferences, privacy settings, and guardrails) instead of the public GET /models catalog. Not persisted; applies only to this discovery request."
                   }
                 }
               }

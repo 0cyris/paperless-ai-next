@@ -111,6 +111,8 @@ class SetupWizard {
         this.aiOpenRouterZdrRow = document.getElementById('aiOpenRouterZdrRow');
         this.aiOpenRouterConnectRow = document.getElementById('aiOpenRouterConnectRow');
         this.aiOpenRouterConnectBtn = document.getElementById('aiOpenRouterConnectBtn');
+        this.aiOpenRouterUserModels = document.getElementById('aiOpenRouterUserModels');
+        this.aiOpenRouterUserModelsRow = document.getElementById('aiOpenRouterUserModelsRow');
 
         this.aiModeQuickstartBtn = document.getElementById('aiModeQuickstartBtn');
         this.aiModeManualBtn = document.getElementById('aiModeManualBtn');
@@ -1117,6 +1119,9 @@ class SetupWizard {
         if (this.aiOpenRouterConnectRow) {
             this.aiOpenRouterConnectRow.classList.toggle('hidden', !isOpenRouter);
         }
+        if (this.aiOpenRouterUserModelsRow) {
+            this.aiOpenRouterUserModelsRow.classList.toggle('hidden', !isOpenRouter);
+        }
     }
 
     setAiConfigMode(mode) {
@@ -1465,6 +1470,7 @@ class SetupWizard {
             apiUrl: this.aiApiUrl.value.trim(),
             token: this.aiToken.value.trim(),
             zdr: this.aiOpenRouterZdr?.value === 'yes',
+            userModels: Boolean(this.aiOpenRouterUserModels?.checked),
             setupValidationTimeoutMs: this.getAiValidationTimeoutMs()
         };
 

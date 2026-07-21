@@ -545,6 +545,9 @@ function initializeFormHandlers() {
   const openrouterKeyInput = document.getElementById('openrouterKey');
   const openrouterModelInput = document.getElementById('openrouterModel');
   const openrouterZdrInput = document.getElementById('openrouterZdr');
+  const openrouterUserModelsInput = document.getElementById(
+    'openrouterUserModels'
+  );
   const fetchAiModelsBtn = document.getElementById('fetchAiModelsBtn');
   const fetchCustomAiModelsBtn = document.getElementById(
     'fetchCustomAiModelsBtn'
@@ -1043,6 +1046,7 @@ function initializeFormHandlers() {
           apiUrl,
           token,
           zdr: openrouterZdrInput?.value === 'yes',
+          userModels: Boolean(openrouterUserModelsInput?.checked),
         });
         const models = result.models;
 

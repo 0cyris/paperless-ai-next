@@ -628,16 +628,20 @@ class SetupService {
       headers.Authorization = `Bearer ${apiKey}`;
     }
 
-    const queryParams = new URLSearchParams({
-      output_modalities: 'text',
-      limit: '1000',
-    });
-    if (options.zdr) {
+    // /models/user is not a discovery-time query filter like output_modalities
+    // or zdr above — it returns whatever the user's own OpenRouter account
+    // (provider preferences, privacy settings, guardrails) already allows, so
+    // those two params are meaningless there and are intentionally omitted.
+    const path = options.userModels ? '/models/user' : '/models';
+    const queryParams = options.userModels
+      ? new URLSearchParams({ limit: '1000' })
+      : new URLSearchParams({ output_modalities: 'text', limit: '1000' });
+    if (!options.userModels && options.zdr) {
       queryParams.set('zdr', 'true');
     }
 
     const response = await this.withValidationTimeout(
-      axios.get(`${normalizedApiUrl}/models?${queryParams.toString()}`, {
+      axios.get(`${normalizedApiUrl}${path}?${queryParams.toString()}`, {
         headers,
         timeout: this.getValidationTimeoutMs(),
       }),
@@ -941,6 +945,7 @@ class SetupService {
             {
               ...this.getOpenRouterUrlValidationOptions(targetUrl),
               zdr: this.isYesFlag(options.zdr),
+              userModels: Boolean(options.userModels),
             }
           );
           allModels.push(...models);
