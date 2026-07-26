@@ -14,6 +14,44 @@ const documentModel = require('../models/document');
 const AIServiceFactory = require('./aiServiceFactory');
 const { isTimeoutError, buildTimeoutErrorMessage } = require('./serviceUtils');
 
+const MAX_ERROR_DETAIL_LENGTH = 500;
+
+/**
+ * Axios's own error.message for a failed vision-model request is just
+ * "Request failed with status code 400" — the actual reason (payload too
+ * large, unsupported image, a provider-specific rejection, etc.) lives in
+ * error.response.data, which this surfaces for logging. The original error
+ * is still thrown/returned unchanged by callers; this is log-only.
+ * @param {Error & {response?: {status?: number, data?: unknown}}} error
+ * @returns {string}
+ */
+function describeApiError(error) {
+  const status = error?.response?.status;
+  const data = error?.response?.data;
+  let bodyDetail = '';
+  if (data !== undefined && data !== null) {
+    const providerMessage = data?.error?.message || data?.message || null;
+    if (providerMessage) {
+      bodyDetail = String(providerMessage);
+    } else {
+      try {
+        bodyDetail = JSON.stringify(data);
+      } catch {
+        bodyDetail = String(data);
+      }
+    }
+  }
+  bodyDetail = bodyDetail.slice(0, MAX_ERROR_DETAIL_LENGTH);
+
+  const message = String(error?.message || 'Unknown error');
+  if (status) {
+    return bodyDetail
+      ? `HTTP ${status}: ${bodyDetail}`
+      : `HTTP ${status}: ${message}`;
+  }
+  return message;
+}
+
 class MistralOcrService {
   constructor() {
     this.activeDocumentIds = new Set();
@@ -337,7 +375,7 @@ class MistralOcrService {
         // Skip the page without inserting placeholder text: the joined result
         // is written back to Paperless as document content.
         console.warn(
-          `[OCR] Page ${index + 1}/${pages.length} failed for document ${documentId}: ${error.message} — skipping page`
+          `[OCR] Page ${index + 1}/${pages.length} failed for document ${documentId}: ${describeApiError(error)} — skipping page`
         );
         lastError = error;
       }

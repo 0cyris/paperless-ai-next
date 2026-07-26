@@ -19,6 +19,35 @@ const MAX_STDIO_BUFFER_BYTES = 1024 * 1024;
 // Defensive cap so a single rendered page cannot blow up request payloads.
 const MAX_PAGE_FILE_BYTES = 32 * 1024 * 1024;
 
+/**
+ * Build a diagnostic string from a failed execFile call. execFile's own
+ * error.message is often just "Command failed: <cmd>" with no stderr
+ * appended when the process was killed before it could write anything (the
+ * common case being our own RENDER_TIMEOUT_MS SIGKILL on a slow render) —
+ * surface killed/signal/exit-code explicitly so that case is distinguishable
+ * from a real poppler error instead of silently looking identical to one.
+ * @param {Error & {stderr?: string, stdout?: string, killed?: boolean, signal?: string, code?: number|string}} error
+ * @returns {string}
+ */
+function describeExecError(error) {
+  const parts = [];
+  const stderr = String(error?.stderr || '').trim();
+  if (stderr) {
+    parts.push(stderr);
+  }
+  if (error?.killed) {
+    parts.push(
+      `process was killed (signal ${error.signal || 'unknown'}), likely because it exceeded the ${RENDER_TIMEOUT_MS}ms render timeout`
+    );
+  } else if (error?.code !== undefined && error?.code !== null) {
+    parts.push(`exit code ${error.code}`);
+  }
+  if (parts.length === 0) {
+    parts.push(String(error?.message || 'no output produced').trim());
+  }
+  return parts.join(' — ');
+}
+
 class PopplerService {
   constructor() {
     // Instance property so tests can inject a fake execFile implementation.
@@ -113,18 +142,14 @@ class PopplerService {
         .sort((a, b) => a.pageNumber - b.pageNumber);
 
       if (pageFiles.length === 0) {
-        const detail = String(
-          renderError?.stderr || renderError?.message || 'no output produced'
-        ).trim();
-        throw new Error(`pdftoppm failed to render any page: ${detail}`);
+        throw new Error(
+          `pdftoppm failed to render any page: ${describeExecError(renderError)}`
+        );
       }
 
       if (renderError) {
-        const detail = String(
-          renderError.stderr || renderError.message || ''
-        ).trim();
         console.warn(
-          `[OCR] pdftoppm exited with an error after rendering ${pageFiles.length} page(s), continuing with partial output: ${detail}`
+          `[OCR] pdftoppm exited with an error after rendering ${pageFiles.length} page(s), continuing with partial output: ${describeExecError(renderError)}`
         );
       }
 
