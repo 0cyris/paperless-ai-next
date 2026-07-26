@@ -29,7 +29,7 @@ const MAX_PAGE_FILE_BYTES = 32 * 1024 * 1024;
  * @param {Error & {stderr?: string, stdout?: string, killed?: boolean, signal?: string, code?: number|string}} error
  * @returns {string}
  */
-function describeExecError(error) {
+function describeExecError(error, timeoutMs = RENDER_TIMEOUT_MS) {
   const parts = [];
   const stderr = String(error?.stderr || '').trim();
   if (stderr) {
@@ -37,7 +37,7 @@ function describeExecError(error) {
   }
   if (error?.killed) {
     parts.push(
-      `process was killed (signal ${error.signal || 'unknown'}), likely because it exceeded the ${RENDER_TIMEOUT_MS}ms render timeout`
+      `process was killed (signal ${error.signal || 'unknown'}), likely because it exceeded the ${timeoutMs}ms render timeout`
     );
   } else if (error?.code !== undefined && error?.code !== null) {
     parts.push(`exit code ${error.code}`);
@@ -85,14 +85,20 @@ class PopplerService {
   /**
    * Render the first pages of a PDF to PNG images via pdftoppm.
    * @param {Buffer} pdfBuffer - raw PDF bytes
-   * @param {{maxPages: number, dpi: number}} options
+   * @param {{maxPages: number, dpi: number, timeoutMs?: number}} options -
+   *   timeoutMs defaults to RENDER_TIMEOUT_MS (60s); callers with slow
+   *   sources (large page counts, high DPI, constrained CPU) can raise it.
    * @returns {Promise<{
    *   pages: Array<{base64: string, mimeType: string, pageNumber: number}>,
    *   totalPages: number|null,
    *   truncated: boolean
    * }>}
    */
-  async renderPdfToImages(pdfBuffer, { maxPages, dpi }) {
+  async renderPdfToImages(pdfBuffer, { maxPages, dpi, timeoutMs }) {
+    const effectiveTimeoutMs =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? timeoutMs
+        : RENDER_TIMEOUT_MS;
     const tempDir = await fs.mkdtemp(
       path.join(os.tmpdir(), 'paperless-ai-ocr-')
     );
@@ -118,7 +124,7 @@ class PopplerService {
             outputPrefix,
           ],
           {
-            timeout: RENDER_TIMEOUT_MS,
+            timeout: effectiveTimeoutMs,
             killSignal: 'SIGKILL',
             maxBuffer: MAX_STDIO_BUFFER_BYTES,
           }
@@ -143,13 +149,13 @@ class PopplerService {
 
       if (pageFiles.length === 0) {
         throw new Error(
-          `pdftoppm failed to render any page: ${describeExecError(renderError)}`
+          `pdftoppm failed to render any page: ${describeExecError(renderError, effectiveTimeoutMs)}`
         );
       }
 
       if (renderError) {
         console.warn(
-          `[OCR] pdftoppm exited with an error after rendering ${pageFiles.length} page(s), continuing with partial output: ${describeExecError(renderError)}`
+          `[OCR] pdftoppm exited with an error after rendering ${pageFiles.length} page(s), continuing with partial output: ${describeExecError(renderError, effectiveTimeoutMs)}`
         );
       }
 

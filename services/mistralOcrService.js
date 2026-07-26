@@ -31,7 +31,24 @@ function describeApiError(error) {
   let bodyDetail = '';
   if (data !== undefined && data !== null) {
     const providerMessage = data?.error?.message || data?.message || null;
-    if (providerMessage) {
+    // OpenRouter wraps upstream-provider failures as
+    // { error: { message: "Provider returned error", metadata: { raw, provider_name } } } —
+    // the generic top-level message is nearly useless on its own, so surface
+    // metadata (where the actual upstream error text lives) alongside it.
+    const metadata = data?.error?.metadata;
+    let metadataDetail = '';
+    if (metadata) {
+      try {
+        metadataDetail =
+          typeof metadata === 'string' ? metadata : JSON.stringify(metadata);
+      } catch {
+        metadataDetail = String(metadata);
+      }
+    }
+
+    if (providerMessage && metadataDetail) {
+      bodyDetail = `${providerMessage} (${metadataDetail})`;
+    } else if (providerMessage) {
       bodyDetail = String(providerMessage);
     } else {
       try {
@@ -312,6 +329,10 @@ class MistralOcrService {
             {
               maxPages: this.pdfRenderMaxPages,
               dpi: this.pdfRenderDpi,
+              // Reuse the user-facing OCR timeout setting rather than a
+              // second, invisible one — a large/slow PDF render should
+              // respect the same allowance the user already configured.
+              timeoutMs: this.ocrTimeoutMs,
             }
           );
         } catch (renderError) {
