@@ -4609,6 +4609,10 @@
                       "nullable": true,
                       "description": "Recommended default; absent for providers without model classification"
                     },
+                    "live": {
+                      "type": "boolean",
+                      "description": "anthropic only — false when the live list failed and the suggested Claude models are returned instead"
+                    },
                     "resolvedApiUrl": {
                       "type": "string"
                     },
@@ -4697,17 +4701,21 @@
                       "openai",
                       "ollama",
                       "custom",
-                      "azure"
+                      "azure",
+                      "anthropic"
                     ]
                   },
                   "apiUrl": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Not needed for anthropic unless a proxy sits in front of api.anthropic.com"
                   },
                   "token": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Omit or leave empty to use the stored key of the selected provider"
                   },
                   "model": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "For anthropic, checked with a models lookup that spends no tokens"
                   },
                   "setupValidationTimeoutMs": {
                     "type": "integer"
@@ -4720,6 +4728,86 @@
         "responses": {
           "200": {
             "description": "AI connectivity result returned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/settings/ocr/test": {
+      "post": {
+        "summary": "Test OCR provider connectivity from the settings page",
+        "description": "Runs one OCR request on a generated test image. For `anthropic` the\nkey is the OCR key when one is given or stored for Claude OCR, and\notherwise the Anthropic AI provider's key (`anthropicApiKey`, then\nthe stored ANTHROPIC_API_KEY).\n",
+        "tags": [
+          "Settings"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "string",
+                    "enum": [
+                      "yes",
+                      "no"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "mistral",
+                      "custom",
+                      "ollama",
+                      "anthropic"
+                    ]
+                  },
+                  "apiUrl": {
+                    "type": "string",
+                    "description": "Ignored for mistral. For anthropic an optional proxy URL; empty uses the Anthropic AI provider's URL, then api.anthropic.com"
+                  },
+                  "apiKey": {
+                    "type": "string",
+                    "description": "Omit or leave empty to use the stored key"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "For anthropic, a Claude model; anything else falls back to the AI model"
+                  },
+                  "setupOcrValidationTimeoutMs": {
+                    "type": "integer"
+                  },
+                  "anthropicApiKey": {
+                    "type": "string",
+                    "description": "Anthropic AI key typed but not saved yet; Claude OCR falls back to it"
+                  },
+                  "anthropicApiUrl": {
+                    "type": "string",
+                    "description": "Anthropic AI proxy URL typed but not saved yet"
+                  },
+                  "anthropicModel": {
+                    "type": "string",
+                    "description": "Anthropic AI model typed but not saved yet"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OCR connectivity result returned"
           },
           "401": {
             "description": "Unauthorized"
@@ -4754,7 +4842,8 @@
                     "enum": [
                       "mistral",
                       "custom",
-                      "ollama"
+                      "ollama",
+                      "anthropic"
                     ]
                   },
                   "apiUrl": {
@@ -4762,10 +4851,22 @@
                   },
                   "apiKey": {
                     "type": "string",
-                    "description": "Omit or leave empty to use the stored OCR_API_KEY / MISTRAL_API_KEY"
+                    "description": "Omit or leave empty to use the stored OCR_API_KEY / MISTRAL_API_KEY (for anthropic, the stored Claude OCR key, then the Anthropic AI key)"
                   },
                   "setupOcrValidationTimeoutMs": {
                     "type": "integer"
+                  },
+                  "anthropicApiKey": {
+                    "type": "string",
+                    "description": "Anthropic AI key typed but not saved yet; used by anthropic when no OCR key is set"
+                  },
+                  "anthropicApiUrl": {
+                    "type": "string",
+                    "description": "Anthropic AI proxy URL typed but not saved yet"
+                  },
+                  "anthropicModel": {
+                    "type": "string",
+                    "description": "Anthropic AI model; anthropic returns it as suggestedModel"
                   }
                 }
               }
@@ -4801,6 +4902,10 @@
                       "type": "string",
                       "nullable": true,
                       "description": "Recommended default; absent for providers without model classification"
+                    },
+                    "live": {
+                      "type": "boolean",
+                      "description": "anthropic only — false when the live list failed and the suggested Claude models are returned instead"
                     },
                     "resolvedApiUrl": {
                       "type": "string"
@@ -5642,7 +5747,8 @@
                       "openai",
                       "ollama",
                       "custom",
-                      "azure"
+                      "azure",
+                      "anthropic"
                     ],
                     "example": "openai"
                   },
@@ -5685,6 +5791,58 @@
                     "type": "string",
                     "description": "Model name for custom LLM provider",
                     "example": "custom-model"
+                  },
+                  "anthropicApiKey": {
+                    "type": "string",
+                    "description": "API key for Anthropic (required when aiProvider is 'anthropic' and none is stored; leave empty to keep the configured value). Saved only with aiProvider 'anthropic'; the anthropic* fields below likewise.",
+                    "example": "sk-ant-api03-abc123"
+                  },
+                  "anthropicModel": {
+                    "type": "string",
+                    "description": "Claude model for analysis; empty keeps the configured one",
+                    "example": "claude-sonnet-5-5"
+                  },
+                  "anthropicEffort": {
+                    "type": "string",
+                    "description": "Effort level; empty leaves it to the model. Rejected with 400 when it is not one of the listed levels.",
+                    "enum": [
+                      "",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ],
+                    "example": ""
+                  },
+                  "anthropicMaxTokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Completion cap per request, thinking included. Rejected with 400 when it is not a positive whole number; empty keeps the configured value.",
+                    "example": 16000
+                  },
+                  "anthropicStructuredOutput": {
+                    "type": "string",
+                    "description": "Constrain the analysis answer to a JSON schema (yes/no)",
+                    "enum": [
+                      "yes",
+                      "no"
+                    ],
+                    "example": "yes"
+                  },
+                  "anthropicPromptCaching": {
+                    "type": "string",
+                    "description": "Mark the system prompt cacheable (yes/no)",
+                    "enum": [
+                      "yes",
+                      "no"
+                    ],
+                    "example": "yes"
+                  },
+                  "anthropicApiUrl": {
+                    "type": "string",
+                    "description": "Only for a proxy; empty uses api.anthropic.com",
+                    "example": ""
                   },
                   "scanInterval": {
                     "type": "number",
@@ -5921,6 +6079,17 @@
                     "maximum": 100,
                     "description": "How many entries the vocabulary proposed from the tag names should aim at, types and topics together (5-100, default 25). Out-of-range values are clamped, a non-numeric value keeps the current setting.",
                     "example": 25
+                  },
+                  "ocrProvider": {
+                    "type": "string",
+                    "description": "OCR fallback provider. For anthropic (Claude OCR) an empty ocrApiKey uses the Anthropic AI key, and ocrApiUrl is an optional proxy URL; a key or URL stored for another provider is cleared when switching to it.",
+                    "enum": [
+                      "mistral",
+                      "custom",
+                      "ollama",
+                      "anthropic"
+                    ],
+                    "example": "mistral"
                   },
                   "ocrAutoProcessEnabled": {
                     "type": "string",
