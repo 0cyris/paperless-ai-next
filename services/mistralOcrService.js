@@ -245,6 +245,27 @@ class MistralOcrService {
   }
 
   /**
+   * OCR one document with a Claude model (OCR_PROVIDER=anthropic).
+   *
+   * Takes every connection detail as an argument so the setup validation can
+   * try a key and model before they are saved; performOcr() passes the
+   * configured ones.
+   *
+   * @param {object} params
+   * @param {string} params.apiKey
+   * @param {string} [params.apiUrl] - proxy only; empty means api.anthropic.com
+   * @param {string} params.model
+   * @param {string} params.base64 - the document, base64-encoded
+   * @param {string} params.mimeType - application/pdf or an image type
+   * @param {number} [params.timeoutMs]
+   * @returns {Promise<string>} the transcribed text
+   */
+  // eslint-disable-next-line no-unused-vars
+  async runAnthropicOcr(params) {
+    throw new Error('Claude OCR is not implemented yet');
+  }
+
+  /**
    * OCR a document with a local vision model. Images are sent as-is; PDFs are
    * rendered to per-page images via poppler (pdftoppm) when enabled and
    * available, otherwise the Paperless first-page thumbnail is used.
