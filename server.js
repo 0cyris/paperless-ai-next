@@ -362,6 +362,9 @@ app.use((req, res, next) => {
   res.locals.appAzureEndpoint = config.azure?.endpoint || 'unknown';
   res.locals.appAzureDeploymentName = config.azure?.deploymentName || 'unknown';
   res.locals.appAzureApiVersion = config.azure?.apiVersion || 'unknown';
+  res.locals.appAnthropicModel = config.anthropic?.model || 'unknown';
+  // Empty means api.anthropic.com, which is worth saying in a bug report.
+  res.locals.appAnthropicApiUrl = config.anthropic?.apiUrl || 'default';
   res.locals.appMistralOcrModel = config.mistralOcr?.model || 'unknown';
   res.locals.appScanInterval = config.scanInterval || 'unknown';
   res.locals.appTokenLimit = String(config.tokenLimit || 'unknown');
@@ -377,6 +380,7 @@ app.use((req, res, next) => {
   res.locals.appOpenAiKeySet = Boolean(config.openai?.apiKey);
   res.locals.appCustomKeySet = Boolean(config.custom?.apiKey);
   res.locals.appAzureKeySet = Boolean(config.azure?.apiKey);
+  res.locals.appAnthropicKeySet = Boolean(config.anthropic?.apiKey);
   res.locals.appMistralKeySet = Boolean(config.mistralOcr?.apiKey);
   res.locals.appApiKeySet = Boolean(config.getApiKey && config.getApiKey());
   res.locals.loginCookieSecurityWarning = null;
