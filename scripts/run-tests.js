@@ -157,6 +157,10 @@ const TESTS = {
   'review-sheet': 'test-review-sheet.js',
   'review-assist': 'test-review-assist.js',
   'review-voice': 'test-review-voice.js',
+  'anthropic-support': 'test-anthropic-support.js',
+  'anthropic-provider': 'test-anthropic-provider.js',
+  'anthropic-settings': 'test-anthropic-settings.js',
+  'ocr-provider-anthropic': 'test-ocr-provider-anthropic.js',
 };
 
 const AREAS = {
@@ -290,6 +294,12 @@ const AREAS = {
     'simplify-assistant-ui',
   ],
   review: ['review-sheet', 'review-assist', 'review-voice'],
+  anthropic: [
+    'anthropic-support',
+    'anthropic-provider',
+    'anthropic-settings',
+    'ocr-provider-anthropic',
+  ],
 };
 
 // Tests intentionally excluded from the auto-discovery drift check below.
