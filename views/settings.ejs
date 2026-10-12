@@ -8,6 +8,21 @@
     pageTitle: 'Settings',
     version: typeof version !== 'undefined' ? version : ''
 }) %>
+<%
+    // The Claude models and effort levels come from services/anthropicSupport.js
+    // through the route; a render without them still produces a usable page.
+    const anthropic = (typeof anthropicOptions !== 'undefined' && anthropicOptions) || {};
+    const anthropicSuggestedModels = Array.isArray(anthropic.suggestedModels) ? anthropic.suggestedModels : [];
+    const anthropicEffortLevels = Array.isArray(anthropic.effortLevels) ? anthropic.effortLevels : [];
+    const anthropicEffortLabels = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+    const anthropicSelected = config.AI_PROVIDER === 'anthropic';
+    const anthropicSwitchOn = (value) => ['yes', 'true', '1'].includes(String(value || 'yes').trim().toLowerCase());
+    // A stored OCR key belongs to the OCR provider it was saved for; the save
+    // route clears it when the provider crosses to or from Claude.
+    const ocrStoredForAnthropic = (config.OCR_PROVIDER || 'mistral') === 'anthropic';
+    const ocrKeyConfiguredDefault = ocrStoredForAnthropic ? configuredSecrets.MISTRAL_API_KEY : (configuredSecrets.OCR_API_KEY || configuredSecrets.MISTRAL_API_KEY);
+    const ocrKeyConfiguredAnthropic = ocrStoredForAnthropic && configuredSecrets.OCR_API_KEY;
+%>
             <div class="zr-settings" data-module="settings-form">
                 <aside class="zr-only-desktop">
                     <nav class="zr-sectionnav" data-module="section-nav">
@@ -448,6 +463,7 @@ const quickstartKeyStored =
                                         <option value="ollama" <%= config.AI_PROVIDER === 'ollama' ? 'selected' : '' %>>Ollama (Local LLM)</option>
                                         <option value="custom" <%= config.AI_PROVIDER === 'custom' ? 'selected' : '' %>>Custom</option>
                                         <option value="azure" <%= config.AI_PROVIDER === 'azure' ? 'selected' : '' %>>Azure</option>
+                                        <option value="anthropic" <%= anthropicSelected ? 'selected' : '' %>>Anthropic (Claude)</option>
                                     </select>
                                     <p class="zr-field__hint">Restart required</p>
                                 </div>
@@ -557,6 +573,67 @@ const quickstartKeyStored =
                                     </div>
                                 </div>
 
+                                <div id="anthropicSettings" class="zr-col zr-col--loose <%= anthropicSelected ? '' : 'hidden' %>">
+                                    <div class="zr-field zr-field--stacked">
+                                        <label for="anthropicApiKey" class="zr-field__name">Anthropic API Key</label>
+                                        <div class="zr-inputgroup">
+                                            <input type="password" id="anthropicApiKey" name="anthropicApiKey" value="" class="zr-input" autocomplete="off" placeholder="<%= configuredSecrets.ANTHROPIC_API_KEY ? 'Configured' : 'sk-ant-...' %>">
+                                            <button type="button" class="zr-btn zr-btn--ghost zr-btn--icon zr-input__reveal" data-input="anthropicApiKey"><svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-eye"/></svg></button>
+                                        </div>
+                                        <p class="zr-field__hint">Restart required<%= configuredSecrets.ANTHROPIC_API_KEY ? ' · Leave empty to keep the stored value' : '' %></p>
+                                    </div>
+                                    <div class="zr-field zr-field--stacked">
+                                        <label for="anthropicModel" class="zr-field__name">Claude Model</label>
+                                        <div class="zr-inputgroup">
+                                            <input type="text" id="anthropicModel" name="anthropicModel" value="<%= config.ANTHROPIC_MODEL || anthropic.defaultModel || '' %>" list="anthropicModelOptions" class="zr-input" autocomplete="off" spellcheck="false">
+                                            <button type="button" id="fetchAnthropicModelsBtn" class="zr-btn">
+                                                <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-list"/></svg>
+                                                <span>Fetch Models</span>
+                                            </button>
+                                        </div>
+                                        <datalist id="anthropicModelOptions">
+                                            <% anthropicSuggestedModels.forEach((model) => { %>
+                                            <option value="<%= model.id %>"><%= model.label %></option>
+                                            <% }) %>
+                                        </datalist>
+                                        <p class="zr-field__hint">Restart required · Pick a suggestion or type any model id</p>
+                                    </div>
+                                    <div class="zr-formgrid">
+                                        <div class="zr-field zr-field--stacked">
+                                            <label for="anthropicEffort" class="zr-field__name">Effort</label>
+                                            <select id="anthropicEffort" name="anthropicEffort" class="zr-input">
+                                                <option value="" <%= config.ANTHROPIC_EFFORT ? '' : 'selected' %>>Model default</option>
+                                                <% anthropicEffortLevels.forEach((level) => { %>
+                                                <option value="<%= level %>" <%= config.ANTHROPIC_EFFORT === level ? 'selected' : '' %>><%= anthropicEffortLabels[level] || level %></option>
+                                                <% }) %>
+                                            </select>
+                                            <p class="zr-field__hint">Higher levels think longer and spend more tokens · Restart required</p>
+                                        </div>
+                                        <div class="zr-field zr-field--stacked">
+                                            <label for="anthropicMaxTokens" class="zr-field__name">Max Tokens</label>
+                                            <input type="number" id="anthropicMaxTokens" name="anthropicMaxTokens" value="<%= config.ANTHROPIC_MAX_TOKENS || anthropic.defaultMaxTokens || '' %>" min="1" step="1" class="zr-input">
+                                            <p class="zr-field__hint">Cap per request; thinking counts toward it · Restart required</p>
+                                        </div>
+                                    </div>
+                                    <%- include('partials/settings-switch', {
+                                        id: 'anthropicStructuredOutput',
+                                        label: 'Structured output',
+                                        checked: anthropicSwitchOn(config.ANTHROPIC_STRUCTURED_OUTPUT),
+                                        hint: 'Constrain the analysis answer to a JSON schema · Restart required'
+                                    }) %>
+                                    <%- include('partials/settings-switch', {
+                                        id: 'anthropicPromptCaching',
+                                        label: 'Prompt caching',
+                                        checked: anthropicSwitchOn(config.ANTHROPIC_PROMPT_CACHING),
+                                        hint: 'Cache the system prompt, which repeats for every document of a scan · Restart required'
+                                    }) %>
+                                    <div class="zr-field zr-field--stacked">
+                                        <label for="anthropicApiUrl" class="zr-field__name">API URL (optional)</label>
+                                        <input type="text" id="anthropicApiUrl" name="anthropicApiUrl" value="<%= config.ANTHROPIC_API_URL || '' %>" class="zr-input" placeholder="https://api.anthropic.com" autocomplete="off" spellcheck="false">
+                                        <p class="zr-field__hint">Only for a proxy; leave empty for api.anthropic.com · Restart required</p>
+                                    </div>
+                                </div>
+
                                 <h4 class="zr-label">Model Parameters</h4>
                                 <div class="zr-formgrid">
                                     <div class="zr-field zr-field--stacked">
@@ -573,11 +650,13 @@ const quickstartKeyStored =
                                         <label for="aiTemperatureAnalysis" class="zr-field__name">Analysis Temperature</label>
                                         <input type="number" id="aiTemperatureAnalysis" name="aiTemperatureAnalysis" value="<%= config.AI_TEMPERATURE_ANALYSIS || '0.3' %>" min="0" max="2" step="0.1" class="zr-input">
                                         <p class="zr-field__hint">Range: 0.0-2.0 · Restart required</p>
+                                        <p class="zr-field__hint <%= anthropicSelected ? '' : 'hidden' %>" data-anthropic-hint>Claude models ignore the temperature</p>
                                     </div>
                                     <div class="zr-field zr-field--stacked">
                                         <label for="aiTemperatureGeneration" class="zr-field__name">Generation Temperature</label>
                                         <input type="number" id="aiTemperatureGeneration" name="aiTemperatureGeneration" value="<%= config.AI_TEMPERATURE_GENERATION || '0.7' %>" min="0" max="2" step="0.1" class="zr-input">
                                         <p class="zr-field__hint">Range: 0.0-2.0 · Restart required</p>
+                                        <p class="zr-field__hint <%= anthropicSelected ? '' : 'hidden' %>" data-anthropic-hint>Claude models ignore the temperature</p>
                                     </div>
                                 </div>
                                 </div>
@@ -921,21 +1000,24 @@ const quickstartKeyStored =
                                     <select id="ocrProvider" name="ocrProvider" class="zr-input">
                                         <option value="mistral" <%= (config.OCR_PROVIDER || 'mistral') === 'mistral' ? 'selected' : '' %>>Mistral OCR API</option>
                                         <option value="custom" <%= ((config.OCR_PROVIDER || 'mistral') === 'custom' || (config.OCR_PROVIDER || 'mistral') === 'ollama') ? 'selected' : '' %>>Custom (Ollama, LM Studio, local models)</option>
+                                        <option value="anthropic" <%= ocrStoredForAnthropic ? 'selected' : '' %>>Claude (Anthropic)</option>
                                     </select>
                                     <p class="zr-field__hint">Restart required</p>
                                 </div>
                                 <div id="ocrApiUrlContainer" class="zr-field zr-field--stacked">
                                     <label for="ocrApiUrl" class="zr-field__name">OCR API URL (optional override)</label>
-                                    <input type="text" id="ocrApiUrl" name="ocrApiUrl" value="<%= config.OCR_API_URL || '' %>" class="zr-input" placeholder="Leave empty to use provider default">
+                                    <input type="text" id="ocrApiUrl" name="ocrApiUrl" value="<%= config.OCR_API_URL || '' %>" class="zr-input" placeholder="Leave empty to use provider default" data-placeholder-default="Leave empty to use provider default" data-placeholder-anthropic="Optional proxy URL">
+                                    <p id="ocrApiUrlAnthropicHint" class="zr-field__hint <%= ocrStoredForAnthropic ? '' : 'hidden' %>">Only for a proxy; empty uses the Anthropic API URL of the AI provider, then api.anthropic.com</p>
                                     <p class="zr-field__hint">Restart required</p>
                                 </div>
                                 <div id="ocrApiKeyContainer" class="zr-field zr-field--stacked">
                                     <label for="ocrApiKey" class="zr-field__name">OCR API Key</label>
                                     <div class="zr-inputgroup">
-                                        <input type="password" id="ocrApiKey" name="ocrApiKey" value="" class="zr-input" placeholder="<%= (configuredSecrets.OCR_API_KEY || configuredSecrets.MISTRAL_API_KEY) ? 'Configured' : 'Required for Mistral' %>">
+                                        <input type="password" id="ocrApiKey" name="ocrApiKey" value="" class="zr-input" placeholder="<%= ocrStoredForAnthropic ? (ocrKeyConfiguredAnthropic ? 'Configured' : 'Optional') : (ocrKeyConfiguredDefault ? 'Configured' : 'Required for Mistral') %>" data-placeholder-default="<%= ocrKeyConfiguredDefault ? 'Configured' : 'Required for Mistral' %>" data-placeholder-anthropic="<%= ocrKeyConfiguredAnthropic ? 'Configured' : 'Optional' %>">
                                         <button type="button" class="zr-btn zr-btn--ghost zr-btn--icon zr-input__reveal" data-input="ocrApiKey"><svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-eye"/></svg></button>
                                     </div>
-                                    <p class="zr-field__hint">Restart required · Optional for local and custom providers<%= (configuredSecrets.OCR_API_KEY || configuredSecrets.MISTRAL_API_KEY) ? ' · Leave empty to keep the stored value' : '' %></p>
+                                    <p id="ocrApiKeyHint" class="zr-field__hint <%= ocrStoredForAnthropic ? 'hidden' : '' %>">Restart required · Optional for local and custom providers<%= ocrKeyConfiguredDefault ? ' · Leave empty to keep the stored value' : '' %></p>
+                                    <p id="ocrApiKeyAnthropicHint" class="zr-field__hint <%= ocrStoredForAnthropic ? '' : 'hidden' %>">Restart required · <%= ocrKeyConfiguredAnthropic ? 'Leave empty to keep the stored value' : 'Empty uses the Anthropic API key from the AI provider' %></p>
                                 </div>
                                 <div class="zr-field zr-field--stacked">
                                     <label for="mistralOcrModel" class="zr-field__name">OCR Model</label>
@@ -1298,7 +1380,8 @@ const quickstartKeyStored =
 
     <script>
         window.__SETTINGS_BOOTSTRAP__ = {
-            aiProviderPresets: <%- JSON.stringify(Array.isArray(aiProviderPresets) ? aiProviderPresets : []).replace(/</g, '\\u003c') %>
+            aiProviderPresets: <%- JSON.stringify(Array.isArray(aiProviderPresets) ? aiProviderPresets : []).replace(/</g, '\\u003c') %>,
+            anthropic: <%- JSON.stringify(anthropic).replace(/</g, '\\u003c') %>
         };
     </script>
     <%- include('partials/scripts/settings-scripts') %>
