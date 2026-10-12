@@ -1741,8 +1741,29 @@ class SetupService {
     return true;
   }
 
-  async saveConfig(configValues, options = {}) {
+  /**
+   * Adds the running JWT_SECRET to a configuration that does not carry one.
+   *
+   * The secret is minted once at first start (server.js) and appears in no
+   * form, while saveConfig rewrites both stores whole. The settings page saved
+   * without it, so the restart after every save minted a new secret and every
+   * open session — the one that had just saved included — stopped verifying.
+   *
+   * @param {object} configValues
+   * @returns {object}
+   */
+  withSessionSecret(configValues) {
+    const secret = String(process.env.JWT_SECRET || '').trim();
+    if (!secret || String(configValues?.JWT_SECRET || '').trim()) {
+      return configValues;
+    }
+    return { ...configValues, JWT_SECRET: secret };
+  }
+
+  async saveConfig(rawConfigValues, options = {}) {
     try {
+      const configValues = this.withSessionSecret(rawConfigValues);
+
       // Validate the new configuration before saving unless explicitly skipped
       if (!options.skipValidation) {
         await this.validateConfig(configValues);

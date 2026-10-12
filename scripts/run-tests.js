@@ -161,10 +161,18 @@ const TESTS = {
   'anthropic-provider': 'test-anthropic-provider.js',
   'anthropic-settings': 'test-anthropic-settings.js',
   'ocr-provider-anthropic': 'test-ocr-provider-anthropic.js',
+  'settings-save-session-secret': 'test-settings-save-session-secret.js',
+  'session-guard': 'test-session-guard.js',
 };
 
 const AREAS = {
-  auth: ['login-mfa-flow', 'rate-limiting', 'thumbnail-auth-guard'],
+  auth: [
+    'login-mfa-flow',
+    'rate-limiting',
+    'thumbnail-auth-guard',
+    'settings-save-session-secret',
+    'session-guard',
+  ],
   ocr: [
     'ocr-fallback-ai-errors',
     'ocr-startup-recovery',
