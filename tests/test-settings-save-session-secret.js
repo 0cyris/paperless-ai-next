@@ -213,6 +213,31 @@ function secretAfterRestart(cwd, env = {}) {
     }
   });
 
+  await check(
+    'OIDC_* kept in the runtime overrides survive the save',
+    async () => {
+      const instance = startInstance({
+        overrides: {
+          JWT_SECRET: 'minted-at-first-start',
+          OIDC_ENABLED: 'yes',
+          OIDC_CLIENT_SECRET: 'oidc-secret',
+        },
+      });
+      try {
+        await instance.setupService.saveConfig(SETTINGS_SAVE, {
+          skipValidation: true,
+        });
+        assert.strictEqual(instance.overrides().OIDC_ENABLED, 'yes');
+        assert.strictEqual(
+          instance.overrides().OIDC_CLIENT_SECRET,
+          'oidc-secret'
+        );
+      } finally {
+        fs.rmSync(instance.tempDir, { recursive: true, force: true });
+      }
+    }
+  );
+
   process.chdir(originalCwd);
   process.env = originalEnv;
   if (typeof originalSnapshot === 'undefined') {
