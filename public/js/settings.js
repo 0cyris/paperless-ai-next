@@ -540,9 +540,6 @@ function initializeFormHandlers() {
   const anthropicApiKeyInput = document.getElementById('anthropicApiKey');
   const anthropicModelInput = document.getElementById('anthropicModel');
   const anthropicApiUrlInput = document.getElementById('anthropicApiUrl');
-  const anthropicModelOptions = document.getElementById(
-    'anthropicModelOptions'
-  );
   const fetchAnthropicModelsBtn = document.getElementById(
     'fetchAnthropicModelsBtn'
   );
@@ -801,10 +798,17 @@ function initializeFormHandlers() {
     } else if (provider === 'anthropic') {
       if (anthropicApiUrlInput)
         anthropicApiUrlInput.value = String(preset.apiUrl || '').trim();
-      if (anthropicModelInput)
-        anthropicModelInput.value =
+      if (anthropicModelInput) {
+        const presetModel =
           String(preset.model || '').trim() ||
           String(anthropicOptions.defaultModel || '');
+        populateModelSelect(
+          anthropicModelInput,
+          [...anthropicSuggestedModelIds, presetModel],
+          'Select Claude model',
+          { preferred: presetModel }
+        );
+      }
       if (
         anthropicApiKeyInput &&
         preset.tokenPlaceholder &&
@@ -1060,25 +1064,18 @@ function initializeFormHandlers() {
   }
 
   /* The live list needs a key; without one (or when the call fails) the route
-     answers with the suggested models and says so in its message, so the
-     datalist is never emptied and the dialog tells which list it shows. */
-  const fillAnthropicModelOptions = (models) => {
-    if (!anthropicModelOptions) return;
-    const labels = new Map(
-      (Array.isArray(anthropicOptions.suggestedModels)
-        ? anthropicOptions.suggestedModels
-        : []
-      ).map((entry) => [String(entry?.id || ''), String(entry?.label || '')])
+     answers with the suggested models and says so in its message. The list is
+     laid out like the OCR model select, and the model chosen before stays
+     selected and listed even when the answer does not name it. */
+  const fillAnthropicModelSelect = (models) => {
+    const current = String(anthropicModelInput?.value || '').trim();
+    const preferred = current || String(anthropicOptions.defaultModel || '');
+    populateModelSelect(
+      anthropicModelInput,
+      [...models, preferred],
+      'Select Claude model',
+      { preferred }
     );
-    anthropicModelOptions.innerHTML = '';
-    Array.from(
-      new Set(models.map((model) => String(model || '').trim()).filter(Boolean))
-    ).forEach((model) => {
-      const option = document.createElement('option');
-      option.value = model;
-      if (labels.get(model)) option.textContent = labels.get(model);
-      anthropicModelOptions.appendChild(option);
-    });
   };
 
   if (fetchAnthropicModelsBtn) {
@@ -1103,7 +1100,7 @@ function initializeFormHandlers() {
         }
 
         const models = Array.isArray(result.models) ? result.models : [];
-        fillAnthropicModelOptions(
+        fillAnthropicModelSelect(
           models.length > 0 ? models : anthropicSuggestedModelIds
         );
         await zrDialog({
@@ -1113,7 +1110,7 @@ function initializeFormHandlers() {
           text: result.message || `Found ${models.length} model(s).`,
         });
       } catch (error) {
-        fillAnthropicModelOptions(anthropicSuggestedModelIds);
+        fillAnthropicModelSelect(anthropicSuggestedModelIds);
         await zrDialog({
           icon: 'error',
           title: 'Loading failed',

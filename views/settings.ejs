@@ -585,18 +585,22 @@ const quickstartKeyStored =
                                     <div class="zr-field zr-field--stacked">
                                         <label for="anthropicModel" class="zr-field__name">Claude Model</label>
                                         <div class="zr-inputgroup">
-                                            <input type="text" id="anthropicModel" name="anthropicModel" value="<%= config.ANTHROPIC_MODEL || anthropic.defaultModel || '' %>" list="anthropicModelOptions" class="zr-input" autocomplete="off" spellcheck="false">
+                                            <%
+                                                const anthropicCurrentModel = config.ANTHROPIC_MODEL || anthropic.defaultModel || '';
+                                                const anthropicModelIds = anthropicSuggestedModels.map((model) => model.id);
+                                                if (anthropicCurrentModel && !anthropicModelIds.includes(anthropicCurrentModel)) anthropicModelIds.push(anthropicCurrentModel);
+                                            %>
+                                            <select id="anthropicModel" name="anthropicModel" class="zr-input">
+                                                <% anthropicModelIds.forEach((id) => { %>
+                                                <option value="<%= id %>" <%= id === anthropicCurrentModel ? 'selected' : '' %>><%= id %></option>
+                                                <% }) %>
+                                            </select>
                                             <button type="button" id="fetchAnthropicModelsBtn" class="zr-btn">
                                                 <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-list"/></svg>
                                                 <span>Fetch Models</span>
                                             </button>
                                         </div>
-                                        <datalist id="anthropicModelOptions">
-                                            <% anthropicSuggestedModels.forEach((model) => { %>
-                                            <option value="<%= model.id %>"><%= model.label %></option>
-                                            <% }) %>
-                                        </datalist>
-                                        <p class="zr-field__hint">Restart required · Pick a suggestion or type any model id</p>
+                                        <p class="zr-field__hint">Restart required · Fetch Models lists every model the API key can use</p>
                                     </div>
                                     <div class="zr-formgrid">
                                         <div class="zr-field zr-field--stacked">
