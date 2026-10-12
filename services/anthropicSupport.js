@@ -19,7 +19,10 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
-const { assertCompletionNotTruncated } = require('./serviceUtils');
+const {
+  assertCompletionNotTruncated,
+  stripTrailingSlashes,
+} = require('./serviceUtils');
 
 /** The model a fresh installation starts with. */
 const ANTHROPIC_DEFAULT_MODEL = 'claude-haiku-5-5';
@@ -323,9 +326,7 @@ function anthropicMaxTokens(requested, configured) {
  */
 function createAnthropicClient({ apiKey, apiUrl = '', timeoutMs } = {}) {
   const clientOptions = { apiKey: String(apiKey || '') };
-  const baseURL = String(apiUrl || '')
-    .trim()
-    .replace(/\/+$/, '');
+  const baseURL = stripTrailingSlashes(String(apiUrl || '').trim());
   if (baseURL) clientOptions.baseURL = baseURL;
   if (typeof timeoutMs === 'number' && timeoutMs > 0) {
     clientOptions.timeout = timeoutMs;

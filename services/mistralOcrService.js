@@ -17,7 +17,11 @@ const popplerService = require('./popplerService');
 const documentModel = require('../models/document');
 const AIServiceFactory = require('./aiServiceFactory');
 const documentProcessingService = require('./documentProcessingService');
-const { isTimeoutError, buildTimeoutErrorMessage } = require('./serviceUtils');
+const {
+  isTimeoutError,
+  buildTimeoutErrorMessage,
+  stripTrailingSlashes,
+} = require('./serviceUtils');
 const {
   ANTHROPIC_DEFAULT_MODEL,
   anthropicThinkingParams,
@@ -195,9 +199,11 @@ class MistralOcrService {
       // OCR_API_URL only when the operator set one (a proxy used for OCR
       // alone); otherwise the AI provider's ANTHROPIC_API_URL. Empty means
       // api.anthropic.com.
-      return String(config.mistralOcr?.apiUrl || config.anthropic?.apiUrl || '')
-        .trim()
-        .replace(/\/+$/, '');
+      return stripTrailingSlashes(
+        String(
+          config.mistralOcr?.apiUrl || config.anthropic?.apiUrl || ''
+        ).trim()
+      );
     }
 
     if (this.provider === 'ollama') {
