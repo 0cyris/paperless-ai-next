@@ -143,6 +143,15 @@ const RELEASES = [
       'New: Settings sections for Duplicates and Simplify tags',
     ],
   },
+  {
+    version: 'v2026.10.01',
+    entries: [
+      'New: Anthropic (Claude) as AI provider. Settings and the setup wizard take an API key and list the Claude models it can use; Claude Haiku 5.5 is the default. The analysis comes back as structured output, and prompt caching keeps the repeated instructions cheap',
+      'New: Claude as OCR provider. It reads PDFs and images directly and uses the API key and model of the AI provider unless OCR has its own',
+      'Fix: Saving the settings no longer signs everybody out. The restart after a save created a new sign-in key, so every open session ended, and a page left open only showed vague errors such as "Model discovery failed". A session that ends now sends the page to the login screen',
+      'Fix: The manual tagging page uses the current design again. Its buttons, cards, document preview and tag chips were still built on styles that no longer exist',
+    ],
+  },
 ];
 
 const latestRelease = RELEASES[RELEASES.length - 1];
