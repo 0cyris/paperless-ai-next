@@ -657,14 +657,13 @@ function startFakeAnthropic() {
         );
       });
       assert.match(block, /id="anthropicApiKey"[^>]*placeholder="Configured"/);
-      assert.match(
-        block,
-        /value="claude-sonnet-5-5" list="anthropicModelOptions"/
-      );
+      assert.match(block, /<select id="anthropicModel" name="anthropicModel"/);
+      assert.match(block, /<option value="claude-sonnet-5-5" selected>/);
       SUGGESTED_IDS.forEach((id) => {
-        assert.ok(
-          block.includes(`<option value="${id}">`),
-          `${id} is suggested`
+        assert.match(
+          block,
+          new RegExp(`<option value="${id}" (selected)?>`),
+          `${id} is offered`
         );
       });
       assert.ok(block.includes('id="fetchAnthropicModelsBtn"'));
@@ -723,9 +722,7 @@ function startFakeAnthropic() {
         /<option value="anthropic" >Anthropic \(Claude\)<\/option>/
       );
       assert.ok(
-        html.includes(
-          `value="${ANTHROPIC_DEFAULT_MODEL}" list="anthropicModelOptions"`
-        ),
+        html.includes(`<option value="${ANTHROPIC_DEFAULT_MODEL}" selected>`),
         'an unconfigured model field shows the model the provider would run'
       );
     });
