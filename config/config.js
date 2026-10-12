@@ -382,6 +382,9 @@ const getOidcConfig = () => ({
   redirectUri: String(process.env.OIDC_REDIRECT_URI || '').trim(),
   scopes: String(process.env.OIDC_SCOPES || 'openid profile email').trim(),
   emailClaim: String(process.env.OIDC_EMAIL_CLAIM || 'email').trim() || 'email',
+  // An address the provider marks unverified is refused unless this is set.
+  allowUnverifiedEmail:
+    parseEnvBoolean(process.env.OIDC_ALLOW_UNVERIFIED_EMAIL, 'no') === 'yes',
   // client_secret_basic | client_secret_post | none; empty = automatic.
   tokenAuthMethod: String(process.env.OIDC_TOKEN_AUTH_METHOD || '').trim(),
   // Login button appearance.

@@ -69,7 +69,7 @@ function startFakeProvider() {
       sub: 'u-1',
       preferred_username: 'andy',
       email: 'andy@example.com',
-      email_verified: false,
+      email_verified: true,
     },
     // Claims the ID token leaves out and only userinfo carries.
     userinfoOnly: [],
@@ -576,6 +576,30 @@ function cookieValue(response, name) {
     const result = oidcService.authorize({ sub: 'x' }, users);
     assert.strictEqual(result.user, null);
     assert.match(result.error, /"email" claim/);
+  });
+
+  await test('authorize() refuses an address the provider marks unverified', async () => {
+    const result = oidcService.authorize(
+      { email: 'andy@example.com', email_verified: false },
+      users
+    );
+    assert.strictEqual(result.user, null);
+    assert.match(result.error, /unverified/);
+    const absent = oidcService.authorize({ email: 'andy@example.com' }, users);
+    assert.strictEqual(absent.user && absent.user.id, 1);
+  });
+
+  await test('OIDC_ALLOW_UNVERIFIED_EMAIL lets an unverified address through', async () => {
+    process.env.OIDC_ALLOW_UNVERIFIED_EMAIL = 'yes';
+    try {
+      const result = oidcService.authorize(
+        { email: 'andy@example.com', email_verified: 'false' },
+        users
+      );
+      assert.strictEqual(result.user && result.user.id, 1);
+    } finally {
+      delete process.env.OIDC_ALLOW_UNVERIFIED_EMAIL;
+    }
   });
 
   await test('authorize() reads OIDC_EMAIL_CLAIM', async () => {

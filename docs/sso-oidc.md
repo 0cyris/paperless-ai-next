@@ -62,15 +62,16 @@ button stays hidden and the log says what is missing at startup:
 
 ### Optional
 
-| Variable                 | Default                | Purpose                                                                                                                                                                                                                                 |
-| ------------------------ | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OIDC_SCOPES`            | `openid profile email` | Requested scopes. `openid` is always added. Keep `email`, it carries the address                                                                                                                                                        |
-| `OIDC_EMAIL_CLAIM`       | `email`                | Claim that holds the e-mail address, for providers that put it elsewhere                                                                                                                                                                |
-| `OIDC_TOKEN_AUTH_METHOD` | automatic              | How the client authenticates at the token endpoint: `client_secret_basic`, `client_secret_post` or `none`. Automatic picks `none` without a secret, otherwise `client_secret_basic` unless the provider only lists `client_secret_post` |
-| `OIDC_BUTTON_TEXT`       | `Sign in with SSO`     | Label of the login button (up to 60 characters)                                                                                                                                                                                         |
-| `OIDC_BUTTON_ICON`       | key icon               | Icon on the button: an `https://` image URL, a path on this server such as `/favicon.png`, or `none`                                                                                                                                    |
-| `OIDC_BUTTON_COLOR`      | theme default          | Background colour of the button: `#rrggbb`, `#rgb`, a colour name, `rgb(...)` or `hsl(...)`                                                                                                                                             |
-| `OIDC_BUTTON_TEXT_COLOR` | theme default          | Text colour of the button, same formats                                                                                                                                                                                                 |
+| Variable                      | Default                | Purpose                                                                                                                                                                                                                                 |
+| ----------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OIDC_SCOPES`                 | `openid profile email` | Requested scopes. `openid` is always added. Keep `email`, it carries the address                                                                                                                                                        |
+| `OIDC_EMAIL_CLAIM`            | `email`                | Claim that holds the e-mail address, for providers that put it elsewhere                                                                                                                                                                |
+| `OIDC_ALLOW_UNVERIFIED_EMAIL` | `no`                   | Accept an address the provider marks `email_verified: false`. Only for providers that never confirm addresses; restrict the application at the provider then                                                                            |
+| `OIDC_TOKEN_AUTH_METHOD`      | automatic              | How the client authenticates at the token endpoint: `client_secret_basic`, `client_secret_post` or `none`. Automatic picks `none` without a secret, otherwise `client_secret_basic` unless the provider only lists `client_secret_post` |
+| `OIDC_BUTTON_TEXT`            | `Sign in with SSO`     | Label of the login button (up to 60 characters)                                                                                                                                                                                         |
+| `OIDC_BUTTON_ICON`            | key icon               | Icon on the button: an `https://` image URL, a path on this server such as `/favicon.png`, or `none`                                                                                                                                    |
+| `OIDC_BUTTON_COLOR`           | theme default          | Background colour of the button: `#rrggbb`, `#rgb`, a colour name, `rgb(...)` or `hsl(...)`                                                                                                                                             |
+| `OIDC_BUTTON_TEXT_COLOR`      | theme default          | Text colour of the button, same formats                                                                                                                                                                                                 |
 
 `OIDC_CLIENT_SECRET` is treated like the other secrets: it is masked in the settings page and in
 logs.
@@ -199,10 +200,11 @@ OIDC_BUTTON_TEXT_COLOR: white
 
 ## Security notes
 
-- **Whoever passes the check is the administrator.** Zettelrobbe only checks that the e-mail
-  address equals `OIDC_ADMIN_EMAIL`. Many providers let users change their own e-mail address, so
-  always restrict the application at the provider to your own account or a group with only you in
-  it.
+- **Whoever passes the check is the administrator.** Zettelrobbe checks that the e-mail address
+  equals `OIDC_ADMIN_EMAIL` and refuses it when the provider marks it unverified
+  (`email_verified: false`, see `OIDC_ALLOW_UNVERIFIED_EMAIL`). Many providers let users change
+  their own e-mail address, so always restrict the application at the provider to your own account
+  or a group with only you in it.
 - **MFA belongs to the provider.** An SSO login does not ask for Zettelrobbe's own TOTP code.
   Enforce MFA at the provider instead.
 - **Use HTTPS.** Plain-HTTP issuers work but log a warning. Use them only on a trusted network.

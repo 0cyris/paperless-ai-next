@@ -542,6 +542,20 @@ class OidcService {
       };
     }
 
+    // A provider that marks the address unverified may have let somebody
+    // register or edit it freely, so it cannot vouch for the admin. A claim
+    // the provider leaves out is not a "no".
+    const unverified =
+      claims.email_verified === false || claims.email_verified === 'false';
+    if (unverified && !settings.allowUnverifiedEmail) {
+      return {
+        user: null,
+        email,
+        error:
+          'The identity provider reports this e-mail address as unverified. Verify it there, or set OIDC_ALLOW_UNVERIFIED_EMAIL=yes if the provider never confirms addresses.',
+      };
+    }
+
     if (email.toLowerCase() !== settings.adminEmail.toLowerCase()) {
       return {
         user: null,
