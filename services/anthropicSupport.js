@@ -334,6 +334,49 @@ function createAnthropicClient({ apiKey, apiUrl = '', timeoutMs } = {}) {
   return new Anthropic(clientOptions);
 }
 
+/** Where a client goes when no proxy URL is set. */
+const ANTHROPIC_DEFAULT_ORIGIN = 'https://api.anthropic.com';
+
+/**
+ * Whether a request targets a Claude endpoint this installation already uses:
+ * ANTHROPIC_API_URL (empty means api.anthropic.com), or OCR_API_URL while
+ * Claude is the OCR provider. A stored key is only substituted for an empty
+ * key field when this holds; otherwise any signed-in caller could name their
+ * own host and receive the saved key in the x-api-key header. Typed keys are
+ * not affected. An empty URL passes: the request then goes to the configured
+ * proxy or to api.anthropic.com, both of which already hold the key.
+ *
+ * @param {string} requestedUrl - the URL the request names, empty for none
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {boolean}
+ */
+function isConfiguredAnthropicHost(requestedUrl, env = process.env) {
+  const origin = (value) => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return ANTHROPIC_DEFAULT_ORIGIN;
+    try {
+      const parsed = new URL(trimmed);
+      return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+
+  if (!String(requestedUrl || '').trim()) return true;
+  const requested = origin(requestedUrl);
+  if (!requested) return false;
+
+  const configured = [origin(env.ANTHROPIC_API_URL)];
+  const ocrIsClaude =
+    String(env.OCR_PROVIDER || '')
+      .trim()
+      .toLowerCase() === 'anthropic';
+  if (ocrIsClaude && String(env.OCR_API_URL || '').trim()) {
+    configured.push(origin(env.OCR_API_URL));
+  }
+  return configured.includes(requested);
+}
+
 /**
  * The visible answer of a Messages response: every text block, in order.
  * Thinking blocks are no part of it, and a response can begin with them, so
@@ -436,6 +479,7 @@ module.exports = {
   anthropicThinkingParams,
   anthropicMaxTokens,
   createAnthropicClient,
+  isConfiguredAnthropicHost,
   anthropicMessageText,
   mapAnthropicUsage,
   assertAnthropicCompleted,

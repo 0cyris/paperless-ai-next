@@ -9,6 +9,7 @@ const {
   ANTHROPIC_DEFAULT_MODEL,
   ANTHROPIC_SUGGESTED_MODELS,
   createAnthropicClient,
+  isConfiguredAnthropicHost,
 } = require('./anthropicSupport');
 
 const CUSTOM_PROVIDER_FALLBACK_API_KEY = 'no-auth-required';
@@ -659,7 +660,9 @@ class SetupService {
    *
    * `anthropicApiKey` / `anthropicApiUrl` carry AI provider values that are
    * not saved yet (the setup wizard collects both before anything is
-   * written); the environment covers the ones that are.
+   * written); the environment covers the ones that are. The stored
+   * ANTHROPIC_API_KEY is only used when the URL is one already configured
+   * (see isConfiguredAnthropicHost).
    *
    * @param {object} options
    * @returns {{apiKey: string, apiUrl: string}}
@@ -667,17 +670,17 @@ class SetupService {
   resolveAnthropicOcrConnection(options = {}) {
     const firstSet = (...values) =>
       values.map((value) => String(value || '').trim()).find(Boolean) || '';
+    const apiUrl = firstSet(
+      options.apiUrl,
+      options.anthropicApiUrl,
+      process.env.ANTHROPIC_API_URL
+    );
+    const storedKey = isConfiguredAnthropicHost(apiUrl)
+      ? process.env.ANTHROPIC_API_KEY
+      : '';
     return {
-      apiKey: firstSet(
-        options.apiKey,
-        options.anthropicApiKey,
-        process.env.ANTHROPIC_API_KEY
-      ),
-      apiUrl: firstSet(
-        options.apiUrl,
-        options.anthropicApiUrl,
-        process.env.ANTHROPIC_API_URL
-      ),
+      apiKey: firstSet(options.apiKey, options.anthropicApiKey, storedKey),
+      apiUrl,
     };
   }
 

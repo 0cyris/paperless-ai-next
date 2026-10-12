@@ -56,6 +56,7 @@ const {
   ANTHROPIC_SUGGESTED_MODELS,
   ANTHROPIC_EFFORT_LEVELS,
   ANTHROPIC_DEFAULT_MAX_TOKENS,
+  isConfiguredAnthropicHost,
 } = require('../services/anthropicSupport');
 const config = require('../config/config.js');
 require('dotenv').config({ path: '../data/.env' });
@@ -3787,9 +3788,17 @@ function resolveStoredAiToken(aiProvider) {
   return '';
 }
 
-function resolveSettingsAiToken(aiProvider, token) {
+function resolveSettingsAiToken(aiProvider, token, apiUrl) {
   const normalizedToken = String(token || '').trim();
-  return normalizedToken || resolveStoredAiToken(aiProvider);
+  if (normalizedToken) return normalizedToken;
+  // The saved Claude key only goes to a Claude endpoint already configured.
+  const provider = String(aiProvider || '')
+    .trim()
+    .toLowerCase();
+  if (provider === 'anthropic' && !isConfiguredAnthropicHost(apiUrl)) {
+    return '';
+  }
+  return resolveStoredAiToken(aiProvider);
 }
 
 /* Accepts what the row menu sends (one id) and what the bulk menu sends (a
@@ -3878,8 +3887,10 @@ function resolveOcrApiKey(apiKey) {
 /* resolveOcrApiKey() for a request that names its OCR provider. Claude OCR
    must never receive a stored Mistral key: MISTRAL_API_KEY never belongs to
    it, and OCR_API_KEY only when Claude is the OCR provider it was saved for.
-   An empty answer is fine — setupService falls back to the Anthropic AI key. */
-function resolveOcrApiKeyForProvider(provider, apiKey) {
+   An empty answer is fine — setupService falls back to the Anthropic AI key.
+   `apiUrl` is where the request goes; the stored key is withheld from any
+   host that is not already configured for Claude. */
+function resolveOcrApiKeyForProvider(provider, apiKey, apiUrl = '') {
   const normalizedProvider = String(provider || '')
     .trim()
     .toLowerCase();
@@ -3895,7 +3906,9 @@ function resolveOcrApiKeyForProvider(provider, apiKey) {
   const storedProvider = String(process.env.OCR_PROVIDER || '')
     .trim()
     .toLowerCase();
-  return storedProvider === 'anthropic' ? process.env.OCR_API_KEY || '' : '';
+  return storedProvider === 'anthropic' && isConfiguredAnthropicHost(apiUrl)
+    ? process.env.OCR_API_KEY || ''
+    : '';
 }
 
 async function validatePaperlessConnectionForSetup(
@@ -5088,7 +5101,11 @@ router.post('/api/setup/ocr/models', express.json(), async (req, res) => {
       apiUrl: req.body?.apiUrl,
       // The wizard used to take the field at face value, so an operator whose
       // key already sat in the environment was told to supply one.
-      apiKey: resolveOcrApiKeyForProvider(req.body?.provider, req.body?.apiKey),
+      apiKey: resolveOcrApiKeyForProvider(
+        req.body?.provider,
+        req.body?.apiKey,
+        req.body?.apiUrl || req.body?.anthropicApiUrl
+      ),
       anthropicApiKey: req.body?.anthropicApiKey,
       anthropicApiUrl: req.body?.anthropicApiUrl,
       anthropicModel: req.body?.anthropicModel,
@@ -5214,7 +5231,11 @@ router.post(
       const validation = await validateAiConnectionForSetup({
         aiProvider: req.body?.aiProvider,
         apiUrl: req.body?.apiUrl,
-        token: resolveSettingsAiToken(req.body?.aiProvider, req.body?.token),
+        token: resolveSettingsAiToken(
+          req.body?.aiProvider,
+          req.body?.token,
+          req.body?.apiUrl
+        ),
         model: req.body?.model,
         azureApiVersion: req.body?.azureApiVersion,
         setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
@@ -5297,7 +5318,8 @@ router.post(
         apiUrl: req.body?.apiUrl,
         apiKey: resolveOcrApiKeyForProvider(
           req.body?.provider,
-          req.body?.apiKey
+          req.body?.apiKey,
+          req.body?.apiUrl || req.body?.anthropicApiUrl
         ),
         model: req.body?.model,
         setupOcrValidationTimeoutMs:
@@ -5330,7 +5352,11 @@ router.post(
       const result = await discoverAiModelsForSetup({
         aiProvider: req.body?.aiProvider,
         apiUrl: req.body?.apiUrl,
-        token: resolveSettingsAiToken(req.body?.aiProvider, req.body?.token),
+        token: resolveSettingsAiToken(
+          req.body?.aiProvider,
+          req.body?.token,
+          req.body?.apiUrl
+        ),
         setupValidationTimeoutMs: req.body?.setupValidationTimeoutMs,
       });
 
@@ -5451,7 +5477,8 @@ router.post(
         apiUrl: req.body?.apiUrl,
         apiKey: resolveOcrApiKeyForProvider(
           req.body?.provider,
-          req.body?.apiKey
+          req.body?.apiKey,
+          req.body?.apiUrl || req.body?.anthropicApiUrl
         ),
         anthropicApiKey: req.body?.anthropicApiKey,
         anthropicApiUrl: req.body?.anthropicApiUrl,

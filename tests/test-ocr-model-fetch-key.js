@@ -117,7 +117,7 @@ check('every OCR route resolves the key before using it', () => {
   // which hands every other provider to resolveOcrApiKey() unchanged.
   const calls = (
     source.match(
-      /resolveOcrApiKeyForProvider\(\s*req\.body\?\.provider,\s*req\.body\?\.apiKey\s*\)/g
+      /resolveOcrApiKeyForProvider\(\s*req\.body\?\.provider,\s*req\.body\?\.apiKey,\s*req\.body\?\.apiUrl \|\| req\.body\?\.anthropicApiUrl\s*\)/g
     ) || []
   ).length;
   assert.strictEqual(

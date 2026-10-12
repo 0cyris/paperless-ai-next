@@ -436,6 +436,7 @@ function startFakeAnthropic() {
       setScenario({
         PAPERLESS_AI_SETUP_ALLOW_LOCALHOST: 'yes',
         ANTHROPIC_API_KEY: GOOD_KEY,
+        ANTHROPIC_API_URL: fake.url,
       });
       let response = await request('POST', '/api/settings/ai/models', {
         aiProvider: 'anthropic',
@@ -459,6 +460,49 @@ function startFakeAnthropic() {
       assert.strictEqual(body.live, false);
       assert.deepStrictEqual(body.models, SUGGESTED_IDS);
       assert.match(body.message, /suggested Claude models/);
+    });
+
+    await test('the stored Claude key never goes to a host that is not configured', async () => {
+      // The fake answers on 127.0.0.1 and localhost alike; only the stored
+      // URL names one of them, so the other counts as somebody else's host.
+      const otherHost = fake.url.includes('127.0.0.1')
+        ? fake.url.replace('127.0.0.1', 'localhost')
+        : fake.url.replace('localhost', '127.0.0.1');
+      setScenario({
+        PAPERLESS_AI_SETUP_ALLOW_LOCALHOST: 'yes',
+        ANTHROPIC_API_KEY: GOOD_KEY,
+        ANTHROPIC_API_URL: fake.url,
+        OCR_PROVIDER: 'anthropic',
+        OCR_API_KEY: GOOD_KEY,
+      });
+
+      let response = await request('POST', '/api/settings/ai/models', {
+        aiProvider: 'anthropic',
+        apiUrl: otherHost,
+        token: '',
+      });
+      let body = await response.json();
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(body.live, false, 'AI: no stored key for a new host');
+
+      response = await request('POST', '/api/settings/ocr/models', {
+        provider: 'anthropic',
+        apiUrl: otherHost,
+        apiKey: '',
+      });
+      body = await response.json();
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(body.live, false, 'OCR: no stored key for a new host');
+
+      const connection = setupService.resolveAnthropicOcrConnection({
+        anthropicApiUrl: otherHost,
+      });
+      assert.strictEqual(connection.apiKey, '');
+      assert.strictEqual(
+        setupService.resolveAnthropicOcrConnection({}).apiKey,
+        GOOD_KEY,
+        'the configured URL still gets the stored key'
+      );
     });
 
     // ── validateOcrConfig for Claude OCR ────────────────────────────────────
