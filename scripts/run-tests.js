@@ -134,6 +134,7 @@ const TESTS = {
   'totp-replay': 'test-totp-replay.js',
   'login-username-timing': 'test-login-username-timing.js',
   'oidc-sso': 'test-oidc-sso.js',
+  'settings-oidc': 'test-settings-oidc.js',
   'setup-complete-guard': 'test-setup-complete-guard.js',
   'rescan-fetch-before-delete': 'test-rescan-fetch-before-delete.js',
   'ocr-empty-result-guard': 'test-ocr-empty-result-guard.js',
@@ -177,6 +178,7 @@ const AREAS = {
     'settings-save-session-secret',
     'session-guard',
     'oidc-sso',
+    'settings-oidc',
   ],
   ocr: [
     'ocr-fallback-ai-errors',
