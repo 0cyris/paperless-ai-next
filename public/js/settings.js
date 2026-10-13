@@ -2675,6 +2675,9 @@ function initializeFormHandlers() {
       const result = await response.json();
 
       if (result.success) {
+        // The saved values are the new baseline for the unsaved-change count
+        // and the leave warning (modules/settings-form.js).
+        setupForm.dispatchEvent(new CustomEvent('zr:settings-saved'));
         await zrDialog({
           icon: 'success',
           title: 'Success!',
@@ -2698,6 +2701,13 @@ function initializeFormHandlers() {
         title: 'Error',
         text: error.message,
       });
+      // Only one settings topic is visible at a time; this opens the one
+      // holding the field the message names (modules/settings-nav.js).
+      document.dispatchEvent(
+        new CustomEvent('zr:settings-save-error', {
+          detail: { message: String(error.message || '') },
+        })
+      );
     } finally {
       submitBtn.disabled = false;
       submitBtn.innerHTML = originalBtnText;
@@ -2924,6 +2934,75 @@ function initializeTooltipAndValidation() {
   initializeFieldHelp();
 }
 
+/**
+ * Names each field's environment variable in its hint ("SCAN_INTERVAL ·
+ * Restart required") and on the field itself as data-env-key, unless the
+ * markup already names it. A switch carries the key on its hidden yes/no input
+ * and on the visible switch alike.
+ */
+function annotateEnvKeys(fieldMappings) {
+  fieldMappings.forEach(({ selector, envKey }) => {
+    const field = document.querySelector(selector);
+    if (!field) return;
+    field.dataset.envKey = envKey;
+    const visibleSwitch = field.id
+      ? document.querySelector(`[data-switch-target="${field.id}"]`)
+      : null;
+    if (visibleSwitch) visibleSwitch.dataset.envKey = envKey;
+
+    // A tile is a single checkbox with its label; the key goes in its tooltip.
+    const tile = field.closest('.zr-checktile');
+    if (tile) {
+      tile.title = envKey;
+      return;
+    }
+    const container = field.closest('.zr-field, .zr-switchrow');
+    if (!container) return;
+    const hints = [...container.querySelectorAll('.zr-field__hint')].filter(
+      (hint) => !hint.hasAttribute('data-anthropic-hint')
+    );
+    const keyElement = () => {
+      const code = document.createElement('code');
+      code.className = 'zr-envkey';
+      code.textContent = envKey;
+      return code;
+    };
+
+    // A hint that names the key in its markup already gets it set like the
+    // added ones, instead of a second copy.
+    const naming = hints.filter((hint) => hint.textContent.includes(envKey));
+    if (naming.length) {
+      naming.forEach((hint) => {
+        if (hint.querySelector('.zr-envkey')) return;
+        const node = [...hint.childNodes].find(
+          (child) =>
+            child.nodeType === Node.TEXT_NODE &&
+            child.textContent.includes(envKey)
+        );
+        if (!node) return;
+        const at = node.textContent.indexOf(envKey);
+        const rest = node.splitText(at);
+        rest.textContent = rest.textContent.slice(envKey.length);
+        hint.insertBefore(keyElement(), rest);
+      });
+      return;
+    }
+    if (!hints.length) {
+      const hint = document.createElement('p');
+      hint.className = 'zr-field__hint';
+      hint.append(keyElement());
+      container.append(hint);
+      return;
+    }
+    // Hints that swap with the provider (the OCR key) each name the key, so it
+    // does not vanish with the one that is shown first.
+    const targets = hints.some((hint) => hint.id)
+      ? hints.filter((hint) => hint.id)
+      : [hints[0]];
+    targets.forEach((hint) => hint.prepend(keyElement(), ' · '));
+  });
+}
+
 function initializeRuntimeOverridePills() {
   const resetLocalOverridesBtn = document.getElementById(
     'resetLocalOverridesBtn'
@@ -2973,26 +3052,9 @@ function initializeRuntimeOverridePills() {
     }
   }
 
-  const overrideKeys = new Set(
-    Array.isArray(parsedOverrideKeys) ? parsedOverrideKeys : []
-  );
-  const lockedEnvKeys = new Set(
-    Array.isArray(parsedLockedEnvKeys) ? parsedLockedEnvKeys : []
-  );
-  if (overrideKeys.size === 0 && lockedEnvKeys.size === 0) {
-    return;
-  }
-
-  // Kept local because classic scripts cannot import ES modules; keep in sync
-  // with modules/text-utils.js.
-  const escapeHtml = (value) =>
-    String(value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-
+  // Every field with the variable it writes. Besides the pills below, this
+  // names the variable in each hint and gives the settings search
+  // (modules/settings-nav.js) something to find a field by.
   const fieldMappings = [
     { selector: '#paperlessUrl', envKey: 'PAPERLESS_API_URL' },
     { selector: '#paperlessPublicUrl', envKey: 'PAPERLESS_PUBLIC_URL' },
@@ -3176,7 +3238,46 @@ function initializeRuntimeOverridePills() {
       selector: '#externalApiAllowPrivateIps',
       envKey: 'EXTERNAL_API_ALLOW_PRIVATE_IPS',
     },
+    { selector: '#oidcEnabled', envKey: 'OIDC_ENABLED' },
+    { selector: '#oidcIssuerUrl', envKey: 'OIDC_ISSUER_URL' },
+    { selector: '#oidcClientId', envKey: 'OIDC_CLIENT_ID' },
+    { selector: '#oidcClientSecret', envKey: 'OIDC_CLIENT_SECRET' },
+    { selector: '#oidcAdminEmail', envKey: 'OIDC_ADMIN_EMAIL' },
+    { selector: '#oidcRedirectUri', envKey: 'OIDC_REDIRECT_URI' },
+    { selector: '#oidcScopes', envKey: 'OIDC_SCOPES' },
+    { selector: '#oidcEmailClaim', envKey: 'OIDC_EMAIL_CLAIM' },
+    {
+      selector: '#oidcAllowUnverifiedEmail',
+      envKey: 'OIDC_ALLOW_UNVERIFIED_EMAIL',
+    },
+    { selector: '#oidcTokenAuthMethod', envKey: 'OIDC_TOKEN_AUTH_METHOD' },
+    { selector: '#oidcButtonText', envKey: 'OIDC_BUTTON_TEXT' },
+    { selector: '#oidcButtonIcon', envKey: 'OIDC_BUTTON_ICON' },
+    { selector: '#oidcButtonColor', envKey: 'OIDC_BUTTON_COLOR' },
+    { selector: '#oidcButtonTextColor', envKey: 'OIDC_BUTTON_TEXT_COLOR' },
   ];
+
+  annotateEnvKeys(fieldMappings);
+
+  const overrideKeys = new Set(
+    Array.isArray(parsedOverrideKeys) ? parsedOverrideKeys : []
+  );
+  const lockedEnvKeys = new Set(
+    Array.isArray(parsedLockedEnvKeys) ? parsedLockedEnvKeys : []
+  );
+  if (overrideKeys.size === 0 && lockedEnvKeys.size === 0) {
+    return;
+  }
+
+  // Kept local because classic scripts cannot import ES modules; keep in sync
+  // with modules/text-utils.js.
+  const escapeHtml = (value) =>
+    String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
 
   const pills = [];
 
@@ -3233,6 +3334,15 @@ function initializeRuntimeOverridePills() {
       // The :disabled styling in the framework carries the visual state.
       fieldElement.disabled = true;
       fieldElement.setAttribute('aria-disabled', 'true');
+      // A switch is clicked on its visible half; the hidden yes/no input alone
+      // being disabled left the switch movable with nothing to show for it.
+      const lockedSwitch = fieldElement.id
+        ? document.querySelector(`[data-switch-target="${fieldElement.id}"]`)
+        : null;
+      if (lockedSwitch) {
+        lockedSwitch.disabled = true;
+        lockedSwitch.setAttribute('aria-disabled', 'true');
+      }
 
       if (!targetLabel.querySelector('.locked-pill')) {
         const lockedPill = document.createElement('span');
