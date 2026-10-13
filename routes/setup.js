@@ -3756,6 +3756,7 @@ const ENV_EXPORT_GROUPS = [
       'OIDC_REDIRECT_URI',
       'OIDC_SCOPES',
       'OIDC_EMAIL_CLAIM',
+      'OIDC_ALLOW_UNVERIFIED_EMAIL',
       'OIDC_TOKEN_AUTH_METHOD',
       'OIDC_BUTTON_TEXT',
       'OIDC_BUTTON_ICON',
@@ -7124,6 +7125,23 @@ router.get('/settings', async (req, res) => {
     PAPERLESS_AI_PORT: process.env.PAPERLESS_AI_PORT || '3000',
     LOG_LEVEL: process.env.LOG_LEVEL || 'info',
     DATE_FORMAT: process.env.DATE_FORMAT || 'DD.MM.YYYY',
+    // Single sign-on. Defaults mirror config.getOidcConfig(); the settings
+    // page lists them so values injected by the container show as locked.
+    OIDC_ENABLED: process.env.OIDC_ENABLED || 'no',
+    OIDC_ISSUER_URL: process.env.OIDC_ISSUER_URL || '',
+    OIDC_CLIENT_ID: process.env.OIDC_CLIENT_ID || '',
+    OIDC_CLIENT_SECRET: process.env.OIDC_CLIENT_SECRET || '',
+    OIDC_ADMIN_EMAIL: process.env.OIDC_ADMIN_EMAIL || '',
+    OIDC_REDIRECT_URI: process.env.OIDC_REDIRECT_URI || '',
+    OIDC_SCOPES: process.env.OIDC_SCOPES || 'openid profile email',
+    OIDC_EMAIL_CLAIM: process.env.OIDC_EMAIL_CLAIM || 'email',
+    OIDC_ALLOW_UNVERIFIED_EMAIL:
+      process.env.OIDC_ALLOW_UNVERIFIED_EMAIL || 'no',
+    OIDC_TOKEN_AUTH_METHOD: process.env.OIDC_TOKEN_AUTH_METHOD || '',
+    OIDC_BUTTON_TEXT: process.env.OIDC_BUTTON_TEXT || '',
+    OIDC_BUTTON_ICON: process.env.OIDC_BUTTON_ICON || '',
+    OIDC_BUTTON_COLOR: process.env.OIDC_BUTTON_COLOR || '',
+    OIDC_BUTTON_TEXT_COLOR: process.env.OIDC_BUTTON_TEXT_COLOR || '',
   };
 
   if (isConfigured) {
