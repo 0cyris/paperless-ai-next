@@ -35,8 +35,23 @@ The password login keeps working next to SSO, so you can still get in when the p
 
 ## Configuration
 
-Like every Zettelrobbe setting, SSO is configured through environment variables, usually in the
-`environment:` section of your `docker-compose.yml`. Single sign-on only switches on when
+SSO can be set on the settings page (**Settings › Sign-in and security › Single sign-on**) or
+through the environment variables below, usually in the `environment:` section of your
+`docker-compose.yml`. Both write the same `OIDC_*` values.
+
+- **On the settings page**, a value the container injects through the environment is shown locked
+  and cannot be changed there; remove it from the compose file to manage it on the page. The
+  client secret is never shown again after saving: leave the field empty to keep it. Saving with
+  SSO switched on is refused while the issuer URL, client ID, admin e-mail or redirect URI is
+  missing or invalid, so a broken setup cannot hide the button unnoticed. Switched off, the page
+  saves whatever you typed. Like every save, it restarts the application.
+- **Test connection** checks the values in the form before you save: it loads the provider's
+  discovery document, shows the token endpoint auth method the login would use and whether the
+  provider offers PKCE, and checks the client ID and secret at the token endpoint (with a made-up
+  authorization code, so nobody is signed in). With the secret field empty the test uses the
+  stored secret, but only for an issuer with the same scheme, host and port as the saved one.
+
+Single sign-on only switches on when
 `OIDC_ENABLED=yes` **and** the three required values are set. If one is missing or invalid, the
 button stays hidden and the log says what is missing at startup:
 
