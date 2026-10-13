@@ -3971,6 +3971,147 @@ function resolveSettingsQuickstartApiKey(baseUrl, apiKey) {
     : '';
 }
 
+/* Single sign-on fields of the settings page: form key -> OIDC_* key. */
+const OIDC_SETTINGS_FIELDS = {
+  oidcEnabled: 'OIDC_ENABLED',
+  oidcIssuerUrl: 'OIDC_ISSUER_URL',
+  oidcClientId: 'OIDC_CLIENT_ID',
+  oidcClientSecret: 'OIDC_CLIENT_SECRET',
+  oidcAdminEmail: 'OIDC_ADMIN_EMAIL',
+  oidcRedirectUri: 'OIDC_REDIRECT_URI',
+  oidcScopes: 'OIDC_SCOPES',
+  oidcEmailClaim: 'OIDC_EMAIL_CLAIM',
+  oidcAllowUnverifiedEmail: 'OIDC_ALLOW_UNVERIFIED_EMAIL',
+  oidcTokenAuthMethod: 'OIDC_TOKEN_AUTH_METHOD',
+  oidcButtonText: 'OIDC_BUTTON_TEXT',
+  oidcButtonIcon: 'OIDC_BUTTON_ICON',
+  oidcButtonColor: 'OIDC_BUTTON_COLOR',
+  oidcButtonTextColor: 'OIDC_BUTTON_TEXT_COLOR',
+};
+const OIDC_SWITCH_FIELDS = new Set(['oidcEnabled', 'oidcAllowUnverifiedEmail']);
+
+/* Turns the single sign-on fields of a settings save into OIDC_* values and
+   checks the result. A field the body does not carry keeps what is stored,
+   so a client that predates the section still saves. An empty client secret
+   keeps the stored one, like every other secret on the page.
+
+   The checks only run when single sign-on ends up switched on, and they look
+   at what will be in force after the save: a value injected by the container
+   wins over a typed one, because saveConfig() never writes over it. Switched
+   off, whatever was typed is saved, so a half-finished setup can be parked.
+
+   Returns { updates } or { error }. */
+function buildOidcSettingsUpdate(body) {
+  const updates = {};
+  for (const [field, envKey] of Object.entries(OIDC_SETTINGS_FIELDS)) {
+    const raw = body?.[field];
+    if (raw === undefined || raw === null) continue;
+    if (OIDC_SWITCH_FIELDS.has(field)) {
+      const normalized = String(raw).trim().toLowerCase();
+      if (['yes', 'on', 'true', '1'].includes(normalized)) {
+        updates[envKey] = 'yes';
+      } else if (['no', 'off', 'false', '0', ''].includes(normalized)) {
+        updates[envKey] = 'no';
+      }
+      continue;
+    }
+    if (field === 'oidcClientSecret') {
+      const secret = String(raw).trim();
+      if (secret) updates[envKey] = secret;
+      continue;
+    }
+    let value = String(raw).trim();
+    if (field === 'oidcScopes') value = value.split(/\s+/).join(' ');
+    if (field === 'oidcTokenAuthMethod') value = value.toLowerCase();
+    if (field === 'oidcButtonText') {
+      value = value.slice(0, oidcService.MAX_BUTTON_TEXT_LENGTH);
+    }
+    updates[envKey] = value;
+  }
+
+  const effective = (envKey) =>
+    String(
+      !configFile.isProtectedRuntimeEnvKey(envKey) && envKey in updates
+        ? updates[envKey]
+        : process.env[envKey] || ''
+    ).trim();
+
+  const enabled = ['yes', 'true', '1', 'on'].includes(
+    effective('OIDC_ENABLED').toLowerCase()
+  );
+  if (!enabled) {
+    return { updates };
+  }
+
+  const errors = oidcService.getConfigErrors({
+    enabled,
+    issuerUrl: effective('OIDC_ISSUER_URL'),
+    clientId: effective('OIDC_CLIENT_ID'),
+    redirectUri: effective('OIDC_REDIRECT_URI'),
+    adminEmail: effective('OIDC_ADMIN_EMAIL'),
+  });
+  const tokenAuthMethod = effective('OIDC_TOKEN_AUTH_METHOD').toLowerCase();
+  if (
+    tokenAuthMethod &&
+    !oidcService.TOKEN_AUTH_METHODS.includes(tokenAuthMethod)
+  ) {
+    errors.push(
+      `OIDC_TOKEN_AUTH_METHOD must be empty (automatic) or one of ${oidcService.TOKEN_AUTH_METHODS.join(', ')}`
+    );
+  }
+  const buttonIcon = effective('OIDC_BUTTON_ICON');
+  if (
+    buttonIcon &&
+    oidcService.resolveButtonIcon(buttonIcon).type === 'default'
+  ) {
+    errors.push(
+      'OIDC_BUTTON_ICON must be empty, "none", an https:// URL or a path starting with /'
+    );
+  }
+  for (const envKey of ['OIDC_BUTTON_COLOR', 'OIDC_BUTTON_TEXT_COLOR']) {
+    const color = effective(envKey);
+    if (color && !oidcService.isSafeCssColor(color)) {
+      errors.push(
+        `${envKey} must be a CSS colour such as #1f6feb, a colour name, or rgb()/hsl()`
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      error: `Single sign-on is switched on but cannot work: ${errors.join('; ')}. Fix these or switch single sign-on off.`,
+    };
+  }
+  return { updates };
+}
+
+/* The origin (scheme, host and port) of a URL, or null. */
+function urlOrigin(value) {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    return parsed.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/* The client secret for the single sign-on test. A typed secret is always
+   used. An empty field means "the stored one", but only for the provider it
+   was stored for: the page never shows the saved secret, and a test endpoint
+   that sent it to any issuer the caller names would hand it out again. */
+function resolveOidcTestClientSecret(issuerUrl, clientSecret) {
+  const typed = String(clientSecret || '').trim();
+  if (typed) return typed;
+
+  const requested = urlOrigin(oidcService.normalizeIssuerUrl(issuerUrl));
+  const configured = urlOrigin(
+    oidcService.normalizeIssuerUrl(process.env.OIDC_ISSUER_URL)
+  );
+  return requested && configured && requested === configured
+    ? String(process.env.OIDC_CLIENT_SECRET || '')
+    : '';
+}
+
 /* Compares the detection target with the configured AI server. The Quickstart
    field is written by hand and normalizeBaseUrls() strips /v1 and trailing
    slashes, so "http://host:1234/v1/" and "http://host:1234" are the same
@@ -5446,6 +5587,181 @@ router.post(
       return res.status(500).json({
         success: false,
         error: 'Could not test OCR connection.',
+      });
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /api/settings/oidc/test:
+ *   post:
+ *     summary: Test a single sign-on provider from the settings page
+ *     description: |
+ *       Reads the provider's discovery document, picks the token endpoint auth
+ *       method the login would use, and checks the client credentials by
+ *       redeeming an authorization code that cannot exist: the provider
+ *       answers invalid_client for wrong credentials and invalid_grant for
+ *       right ones. Nobody is signed in and nothing is saved.
+ *
+ *       An empty `clientSecret` uses the stored OIDC_CLIENT_SECRET, but only
+ *       when the issuer has the same origin (scheme, host, port) as the
+ *       configured OIDC_ISSUER_URL; for any other issuer the test runs
+ *       without a secret. Private network addresses are allowed, since
+ *       identity providers usually run next to the application.
+ *     tags:
+ *       - Settings
+ *     security:
+ *       - BearerAuth: []
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - issuerUrl
+ *               - clientId
+ *             properties:
+ *               issuerUrl:
+ *                 type: string
+ *                 description: Issuer URL (http or https); a pasted discovery URL is accepted
+ *                 example: "https://auth.example.com/application/o/zettelrobbe/"
+ *               clientId:
+ *                 type: string
+ *                 example: "zettelrobbe"
+ *               clientSecret:
+ *                 type: string
+ *                 description: Omit or leave empty to use the stored secret (same issuer origin only)
+ *                 example: ""
+ *               tokenAuthMethod:
+ *                 type: string
+ *                 description: Empty picks the method automatically
+ *                 enum: ["", "client_secret_basic", "client_secret_post", "none"]
+ *                 example: ""
+ *     responses:
+ *       200:
+ *         description: |
+ *           Test result. success is false (still HTTP 200) when the provider
+ *           could not be reached, sent no usable discovery document, or refused
+ *           the client credentials; error then says which.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - type: object
+ *                   properties:
+ *                     success:
+ *                       type: boolean
+ *                       example: true
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         issuer:
+ *                           type: string
+ *                           description: The issuer the provider advertises
+ *                           example: "https://auth.example.com/application/o/zettelrobbe/"
+ *                         tokenAuthMethods:
+ *                           type: array
+ *                           description: Token endpoint auth methods the provider advertises (empty when it lists none)
+ *                           items:
+ *                             type: string
+ *                           example: ["client_secret_basic", "client_secret_post"]
+ *                         chosenAuthMethod:
+ *                           type: string
+ *                           description: The method a login would use
+ *                           example: "client_secret_basic"
+ *                         pkce:
+ *                           type: boolean
+ *                           description: Whether the provider advertises PKCE with S256
+ *                           example: true
+ *                     message:
+ *                       type: string
+ *                       example: "The provider answered and accepted the client."
+ *                 - $ref: '#/components/schemas/Error'
+ *       400:
+ *         description: Invalid input (issuer not an http(s) URL, empty client ID, unknown auth method, or a method that needs a secret without one)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       302:
+ *         description: Not signed in; redirected to /login like every other route behind the authentication guard
+ */
+router.post(
+  '/api/settings/oidc/test',
+  isAuthenticated,
+  express.json(),
+  async (req, res) => {
+    try {
+      const issuerUrl = oidcService.normalizeIssuerUrl(req.body?.issuerUrl);
+      const clientId = String(req.body?.clientId || '').trim();
+      const tokenAuthMethod = String(req.body?.tokenAuthMethod || '')
+        .trim()
+        .toLowerCase();
+
+      if (!oidcService.isAbsoluteHttpUrl(issuerUrl)) {
+        return res.status(400).json({
+          success: false,
+          error: 'The issuer URL must start with https:// or http://.',
+        });
+      }
+      if (!clientId) {
+        return res
+          .status(400)
+          .json({ success: false, error: 'The client ID is missing.' });
+      }
+      if (
+        tokenAuthMethod &&
+        !oidcService.TOKEN_AUTH_METHODS.includes(tokenAuthMethod)
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: `Unknown token endpoint auth method. Use one of: ${oidcService.TOKEN_AUTH_METHODS.join(', ')}, or leave it empty.`,
+        });
+      }
+
+      const clientSecret = resolveOidcTestClientSecret(
+        issuerUrl,
+        req.body?.clientSecret
+      );
+      if (
+        !clientSecret &&
+        ['client_secret_basic', 'client_secret_post'].includes(tokenAuthMethod)
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: `${tokenAuthMethod} needs a client secret. Enter it, or choose another auth method.`,
+        });
+      }
+
+      let data;
+      try {
+        data = await oidcService.testConnection({
+          issuerUrl,
+          clientId,
+          clientSecret,
+          tokenAuthMethod,
+        });
+      } catch (error) {
+        console.warn(
+          '[WARN] POST /api/settings/oidc/test failed:',
+          error.message
+        );
+        return res.json({ success: false, error: error.message });
+      }
+
+      return res.json({
+        success: true,
+        data,
+        message: 'The provider answered and accepted the client.',
+      });
+    } catch (error) {
+      console.error('[ERROR] POST /api/settings/oidc/test:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Could not test single sign-on.',
       });
     }
   }
@@ -7223,6 +7539,15 @@ router.get('/settings', async (req, res) => {
     aiProviderPresets,
     anthropicOptions: getAnthropicFormOptions(),
     mfaSettings,
+    // Single sign-on: the callback URL as this request sees it (what to
+    // register at the provider when OIDC_REDIRECT_URI is empty), and what the
+    // running configuration lacks. enabled is the switch, not whether the
+    // button is offered: that also needs errors to be empty.
+    oidcDetectedRedirectUri: oidcService.deriveRedirectUri(req),
+    oidcStatus: {
+      enabled: oidcService.getSettings().enabled,
+      errors: oidcService.getConfigErrors(),
+    },
     changelogReleases: changelog.releases,
     // No banner for the normal case: "already configured" was shown on every
     // visit to a configured instance, i.e. always, and said nothing.
@@ -8630,6 +8955,72 @@ router.get('/health', async (req, res) => {
  *                 description: How every date in the web interface is rendered
  *                 enum: ["DD.MM.YYYY", "YYYY-MM-DD"]
  *                 example: "DD.MM.YYYY"
+ *               oidcEnabled:
+ *                 type: string
+ *                 description: |
+ *                   Single sign-on switch (OIDC_ENABLED). Every oidc* field is optional; one the body
+ *                   leaves out keeps the stored value. When single sign-on ends up switched on, the save
+ *                   is refused with 400 unless the issuer URL is an http(s) URL, the client ID is set,
+ *                   the admin e-mail is valid, the redirect URI is empty or an absolute http(s) URL, and
+ *                   the auth method, button icon and colours are valid. Values injected by the container
+ *                   are never overwritten.
+ *                 enum: ["yes", "no"]
+ *                 example: "no"
+ *               oidcIssuerUrl:
+ *                 type: string
+ *                 description: Issuer URL of the OpenID Connect provider (OIDC_ISSUER_URL); a pasted discovery URL is accepted
+ *                 example: "https://auth.example.com/application/o/zettelrobbe/"
+ *               oidcClientId:
+ *                 type: string
+ *                 description: Client ID registered at the provider (OIDC_CLIENT_ID)
+ *                 example: "zettelrobbe"
+ *               oidcClientSecret:
+ *                 type: string
+ *                 description: Client secret (OIDC_CLIENT_SECRET); leave empty to keep the stored one
+ *                 example: ""
+ *               oidcAdminEmail:
+ *                 type: string
+ *                 description: E-mail address of the identity that signs in as the administrator (OIDC_ADMIN_EMAIL)
+ *                 example: "admin@example.com"
+ *               oidcRedirectUri:
+ *                 type: string
+ *                 description: Callback URL registered at the provider (OIDC_REDIRECT_URI); empty derives it from the request
+ *                 example: ""
+ *               oidcScopes:
+ *                 type: string
+ *                 description: Space-separated scopes (OIDC_SCOPES); openid is always added
+ *                 example: "openid profile email"
+ *               oidcEmailClaim:
+ *                 type: string
+ *                 description: Claim that carries the e-mail address (OIDC_EMAIL_CLAIM)
+ *                 example: "email"
+ *               oidcAllowUnverifiedEmail:
+ *                 type: string
+ *                 description: Accept an e-mail address the provider marks unverified (OIDC_ALLOW_UNVERIFIED_EMAIL)
+ *                 enum: ["yes", "no"]
+ *                 example: "no"
+ *               oidcTokenAuthMethod:
+ *                 type: string
+ *                 description: Token endpoint auth method (OIDC_TOKEN_AUTH_METHOD); empty picks it automatically
+ *                 enum: ["", "client_secret_basic", "client_secret_post", "none"]
+ *                 example: ""
+ *               oidcButtonText:
+ *                 type: string
+ *                 maxLength: 60
+ *                 description: Label of the login button (OIDC_BUTTON_TEXT); longer text is cut to 60 characters
+ *                 example: "Sign in with Authentik"
+ *               oidcButtonIcon:
+ *                 type: string
+ *                 description: Login button icon (OIDC_BUTTON_ICON); empty for the built-in icon, "none", an https URL or a path on this server
+ *                 example: ""
+ *               oidcButtonColor:
+ *                 type: string
+ *                 description: Login button background (OIDC_BUTTON_COLOR); hex, colour name, rgb() or hsl()
+ *                 example: "#fd4b2d"
+ *               oidcButtonTextColor:
+ *                 type: string
+ *                 description: Login button text colour (OIDC_BUTTON_TEXT_COLOR)
+ *                 example: "#ffffff"
  *     responses:
  *       200:
  *         description: Settings updated successfully
@@ -9797,6 +10188,14 @@ router.post('/settings', express.json(), async (req, res) => {
         updatedConfig.TAG_CACHE_TTL_SECONDS = '300';
       }
     }
+
+    // Single sign-on. Checked last among the fields so an incomplete provider
+    // is reported only when everything else on the page is fine.
+    const oidcUpdate = buildOidcSettingsUpdate(req.body);
+    if (oidcUpdate.error) {
+      return res.status(400).json({ success: false, error: oidcUpdate.error });
+    }
+    Object.assign(updatedConfig, oidcUpdate.updates);
 
     // Handle API key
     let apiToken = configFile.getApiKey

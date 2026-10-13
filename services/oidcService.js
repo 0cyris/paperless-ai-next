@@ -188,6 +188,23 @@ function resolveScopes(settings) {
   return scopes.join(' ');
 }
 
+/**
+ * A short, readable reason for a failed request. openid-client wraps network
+ * errors, so the useful part (ECONNREFUSED, a timeout, a certificate problem)
+ * often sits in the cause.
+ *
+ * @param {Error} error
+ * @returns {string}
+ */
+function describeError(error) {
+  const cause = error?.cause;
+  const causeText =
+    cause && typeof cause === 'object' && (cause.code || cause.message)
+      ? ` (${cause.code || cause.message})`
+      : '';
+  return `${error?.message || String(error)}${causeText}`;
+}
+
 function buildClientAuthentication(client, method, clientSecret) {
   if (method === 'none') return client.None();
   if (!clientSecret) {
@@ -213,12 +230,13 @@ class OidcService {
 
   /**
    * What is missing or invalid in the configuration. Empty when SSO is off or
-   * fully configured.
+   * fully configured. Without an argument it checks the running
+   * configuration; the settings page passes the values it is about to save.
    *
+   * @param {{ enabled: boolean, issuerUrl: string, clientId: string, redirectUri: string, adminEmail: string }} [settings]
    * @returns {string[]}
    */
-  getConfigErrors() {
-    const settings = this.getSettings();
+  getConfigErrors(settings = this.getSettings()) {
     if (!settings.enabled) return [];
 
     const errors = [];
@@ -341,6 +359,25 @@ class OidcService {
    * @returns {Promise<import('openid-client').Configuration>}
    */
   async _buildClientConfig(settings) {
+    const { client, serverMetadata, insecure } =
+      await this._discoverProvider(settings);
+    const authMethod = selectTokenAuthMethod(settings, serverMetadata);
+    return this._createClientConfig(
+      client,
+      serverMetadata,
+      settings,
+      authMethod,
+      insecure
+    );
+  }
+
+  /**
+   * Reads the provider's discovery document.
+   *
+   * @param {{ issuerUrl: string, clientId: string }} settings
+   * @returns {Promise<{ client: object, serverMetadata: object, insecure: boolean }>}
+   */
+  async _discoverProvider(settings) {
     const client = getOpenidClient();
     const issuer = new URL(normalizeIssuerUrl(settings.issuerUrl));
     const insecure = issuer.protocol === 'http:';
@@ -360,8 +397,16 @@ class OidcService {
       settings,
       options
     );
-    const authMethod = selectTokenAuthMethod(settings, serverMetadata);
+    return { client, serverMetadata, insecure };
+  }
 
+  /**
+   * The openid-client configuration for a discovered provider and a chosen
+   * token endpoint auth method.
+   *
+   * @returns {import('openid-client').Configuration}
+   */
+  _createClientConfig(client, serverMetadata, settings, authMethod, insecure) {
     const clientConfig = new client.Configuration(
       serverMetadata,
       settings.clientId,
@@ -373,6 +418,91 @@ class OidcService {
       client.allowInsecureRequests(clientConfig);
     }
     return clientConfig;
+  }
+
+  /**
+   * Checks a provider from the settings page without signing anybody in:
+   * discovery, the token endpoint auth method that would be used, and the
+   * client credentials. The credentials are checked by redeeming an
+   * authorization code that cannot exist. The token endpoint authenticates
+   * the client before it looks at the code (RFC 6749, section 5.2), so
+   * "invalid_client" means the client ID, secret or auth method is wrong,
+   * while "invalid_grant" means the client was accepted.
+   *
+   * Throws an Error whose message is meant for the settings page when the
+   * provider cannot be used.
+   *
+   * @param {{ issuerUrl: string, clientId: string, clientSecret: string, tokenAuthMethod: string }} settings
+   * @returns {Promise<{ issuer: string, tokenAuthMethods: string[], chosenAuthMethod: string, pkce: boolean }>}
+   */
+  async testConnection(settings) {
+    const discoveryUrl = `${stripTrailingSlash(normalizeIssuerUrl(settings.issuerUrl))}${DISCOVERY_SUFFIX}`;
+    let discovered;
+    try {
+      discovered = await this._discoverProvider(settings);
+    } catch (error) {
+      const advertised = error?.cause?.body?.issuer;
+      if (
+        error?.code === 'OAUTH_JSON_ATTRIBUTE_COMPARISON_FAILED' &&
+        typeof advertised === 'string'
+      ) {
+        throw new Error(
+          `The provider calls itself "${advertised}". Use exactly that as the issuer URL.`,
+          { cause: error }
+        );
+      }
+      throw new Error(
+        `No usable discovery document at ${discoveryUrl}: ${describeError(error)}`,
+        { cause: error }
+      );
+    }
+
+    const { client, serverMetadata, insecure } = discovered;
+    const chosenAuthMethod = selectTokenAuthMethod(settings, serverMetadata);
+    const clientConfig = this._createClientConfig(
+      client,
+      serverMetadata,
+      settings,
+      chosenAuthMethod,
+      insecure
+    );
+
+    try {
+      await client.genericGrantRequest(clientConfig, 'authorization_code', {
+        code: client.randomState(),
+        redirect_uri: `${new URL(serverMetadata.issuer).origin}${CALLBACK_PATH}`,
+        code_verifier: client.randomPKCECodeVerifier(),
+      });
+    } catch (error) {
+      const code = error?.error;
+      if (code === 'invalid_client' || error?.status === 401) {
+        throw new Error(
+          `The provider refused the client (${code || `HTTP ${error.status}`}). Check the client ID, the client secret and the token endpoint auth method (${chosenAuthMethod}).`,
+          { cause: error }
+        );
+      }
+      if (!(error instanceof client.ResponseBodyError)) {
+        throw new Error(
+          `The token endpoint could not be reached: ${describeError(error)}`,
+          { cause: error }
+        );
+      }
+      // Any other OAuth error (invalid_grant, as expected) means the client
+      // was authenticated and only the made-up code was refused.
+    }
+
+    const advertisedMethods =
+      serverMetadata.token_endpoint_auth_methods_supported;
+    const challengeMethods = serverMetadata.code_challenge_methods_supported;
+    return {
+      issuer: serverMetadata.issuer,
+      tokenAuthMethods: Array.isArray(advertisedMethods)
+        ? advertisedMethods
+        : [],
+      chosenAuthMethod,
+      pkce:
+        Array.isArray(challengeMethods) && challengeMethods.includes('S256'),
+    };
   }
 
   /**
@@ -427,6 +557,17 @@ class OidcService {
     if (settings.redirectUri) {
       return settings.redirectUri;
     }
+    return this.deriveRedirectUri(req);
+  }
+
+  /**
+   * The callback URL as seen from the request, ignoring OIDC_REDIRECT_URI.
+   * The settings page shows it as the value to register with the provider.
+   *
+   * @param {import('express').Request} req
+   * @returns {string}
+   */
+  deriveRedirectUri(req) {
     return `${req.protocol}://${req.get('host')}${CALLBACK_PATH}`;
   }
 
@@ -581,6 +722,9 @@ class OidcService {
 
 module.exports = new OidcService();
 module.exports.CALLBACK_PATH = CALLBACK_PATH;
+module.exports.TOKEN_AUTH_METHODS = TOKEN_AUTH_METHODS;
+module.exports.MAX_BUTTON_TEXT_LENGTH = MAX_BUTTON_TEXT_LENGTH;
+module.exports.isAbsoluteHttpUrl = isAbsoluteHttpUrl;
 module.exports.isValidEmail = isValidEmail;
 module.exports.isSafeCssColor = isSafeCssColor;
 module.exports.normalizeIssuerUrl = normalizeIssuerUrl;
