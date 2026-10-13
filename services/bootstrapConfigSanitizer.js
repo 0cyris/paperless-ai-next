@@ -13,6 +13,7 @@ const BOOTSTRAP_SECRET_FIELDS = [
   'MISTRAL_API_KEY',
   'API_KEY',
   'JWT_SECRET',
+  'OIDC_CLIENT_SECRET',
 ];
 
 // Returns a shallow copy of config with every secret field removed.

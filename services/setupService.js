@@ -1745,22 +1745,34 @@ class SetupService {
   }
 
   /**
-   * Adds the running JWT_SECRET to a configuration that does not carry one.
+   * Adds the running JWT_SECRET and OIDC_* settings to a configuration that
+   * does not carry them.
    *
    * The secret is minted once at first start (server.js) and appears in no
    * form, while saveConfig rewrites both stores whole. The settings page saved
    * without it, so the restart after every save minted a new secret and every
    * open session — the one that had just saved included — stopped verifying.
+   * Single sign-on is configured outside the forms as well, so a save dropped
+   * OIDC_* lines kept in data/.env or the runtime overrides in the same way.
    *
    * @param {object} configValues
    * @returns {object}
    */
   withSessionSecret(configValues) {
+    const carried = {};
     const secret = String(process.env.JWT_SECRET || '').trim();
-    if (!secret || String(configValues?.JWT_SECRET || '').trim()) {
-      return configValues;
+    if (secret && !String(configValues?.JWT_SECRET || '').trim()) {
+      carried.JWT_SECRET = secret;
     }
-    return { ...configValues, JWT_SECRET: secret };
+    Object.keys(process.env)
+      .filter((key) => key.startsWith('OIDC_'))
+      .filter((key) => !(configValues && key in configValues))
+      .forEach((key) => {
+        carried[key] = process.env[key];
+      });
+    return Object.keys(carried).length > 0
+      ? { ...configValues, ...carried }
+      : configValues;
   }
 
   async saveConfig(rawConfigValues, options = {}) {
