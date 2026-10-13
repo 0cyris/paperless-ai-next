@@ -18,6 +18,7 @@
  */
 
 const config = require('../config/config');
+const { stripTrailingSlashes } = require('./serviceUtils');
 
 // Loaded on first use, not at startup: an install that never turns SSO on
 // keeps running even on an image whose dependencies predate openid-client.
@@ -43,7 +44,7 @@ const TOKEN_AUTH_METHODS = [
 ];
 
 function stripTrailingSlash(value) {
-  return String(value).replace(/\/+$/, '');
+  return stripTrailingSlashes(String(value));
 }
 
 /**
