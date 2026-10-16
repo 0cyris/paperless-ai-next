@@ -4,6 +4,7 @@ const ollamaService = require('./ollamaService');
 const customService = require('./customService');
 const openrouterService = require('./openrouterService');
 const azureService = require('./azureService');
+const anthropicService = require('./anthropicService');
 
 class AIServiceFactory {
   static getService() {
@@ -19,6 +20,8 @@ class AIServiceFactory {
         return openrouterService;
       case 'azure':
         return azureService;
+      case 'anthropic':
+        return anthropicService;
     }
   }
 }

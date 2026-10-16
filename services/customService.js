@@ -3,18 +3,55 @@ const {
   calculateTotalPromptTokens,
   truncateToTokenLimit,
   extractChatMessageContent,
+  assertCompletionNotTruncated,
   isTimeoutError,
-  buildTimeoutErrorMessage
+  buildTimeoutErrorMessage,
+  toNameList,
 } = require('./serviceUtils');
+const {
+  abortSignal,
+  abortedGenerationError,
+  hasNumber,
+  hasSystemPrompt,
+  isAbortError,
+  modelOverride,
+  progressHandler,
+  readCompletionUsage,
+  reasoningEffortForCompatible,
+  reasoningEnabled,
+  runChatCompletionStream,
+  stripReasoningText,
+} = require('./aiGenerateOptions');
 const OpenAI = require('openai');
 const config = require('../config/config');
 const paperlessService = require('./paperlessService');
 const fs = require('fs').promises;
 const path = require('path');
-const { THUMBNAIL_CACHE_DIR, getThumbnailCachePath } = require('./thumbnailCachePaths');
+const {
+  THUMBNAIL_CACHE_DIR,
+  getThumbnailCachePath,
+} = require('./thumbnailCachePaths');
 const RestrictionPromptService = require('./restrictionPromptService');
-const responseLogPath = path.join(process.cwd(), 'data', 'logs', 'response.txt');
+const responseLogPath = path.join(
+  process.cwd(),
+  'data',
+  'logs',
+  'response.txt'
+);
 const CUSTOM_PROVIDER_FALLBACK_API_KEY = 'no-auth-required';
+/** What an operator can do about an answer that hit the completion cap. */
+const TRUNCATION_REMEDY = 'Raise Response Tokens (RESPONSE_TOKENS).';
+/**
+ * The soft switch the Qwen family reads out of the prompt itself.
+ *
+ * `chat_template_kwargs` only reaches a server that applies the model's chat
+ * template; a gateway that forwards the messages and drops the rest leaves the
+ * model thinking anyway. Qwen understands the same wish written into the last
+ * line of the user message, so both are sent and whichever arrives wins.
+ */
+const QWEN_NO_THINK_SWITCH = '/no_think';
+/** Models that understand the line above. */
+const QWEN_MODEL_PATTERN = /qwen/i;
 
 class CustomOpenAIService {
   // providerName selects the config block ('custom' or 'openrouter') so the
@@ -27,14 +64,19 @@ class CustomOpenAIService {
   }
 
   get providerConfig() {
-    return this.providerName === 'openrouter' ? config.openRouter : config.custom;
+    return this.providerName === 'openrouter'
+      ? config.openRouter
+      : config.custom;
   }
 
   // Extra OpenAI-incompatible body fields for chat completions. OpenRouter
   // accepts a `provider` routing object; the openai SDK passes unknown
   // top-level params through to the request body untouched.
   get chatRequestExtras() {
-    if (this.providerName === 'openrouter' && config.openRouter?.zdr === 'yes') {
+    if (
+      this.providerName === 'openrouter' &&
+      config.openRouter?.zdr === 'yes'
+    ) {
       return { provider: { zdr: true } };
     }
     return {};
@@ -110,21 +152,25 @@ class CustomOpenAIService {
     try {
       return {
         parsed: JSON.parse(sanitizedContent),
-        normalized: sanitizedContent
+        normalized: sanitizedContent,
       };
     } catch (directParseError) {
       const extractedJson = this._extractFirstJsonValue(sanitizedContent);
       if (!extractedJson) {
-        throw new Error('Invalid JSON response from API', { cause: directParseError });
+        throw new Error('Invalid JSON response from API', {
+          cause: directParseError,
+        });
       }
 
       try {
         return {
           parsed: JSON.parse(extractedJson),
-          normalized: extractedJson
+          normalized: extractedJson,
         };
       } catch (extractedParseError) {
-        throw new Error('Invalid JSON response from API', { cause: extractedParseError });
+        throw new Error('Invalid JSON response from API', {
+          cause: extractedParseError,
+        });
       }
     }
   }
@@ -134,17 +180,28 @@ class CustomOpenAIService {
       this.client = new OpenAI({
         baseURL: this.providerConfig.apiUrl,
         // OpenAI-compatible SDKs require an apiKey value even when auth is disabled.
-        apiKey: this.providerConfig.apiKey || CUSTOM_PROVIDER_FALLBACK_API_KEY
+        apiKey: this.providerConfig.apiKey || CUSTOM_PROVIDER_FALLBACK_API_KEY,
       });
     }
   }
 
-  async analyzeDocument(content, existingTags = [], existingCorrespondentList = [], existingDocumentTypesList = [], id, customPrompt = null, options = {}) {
+  async analyzeDocument(
+    content,
+    existingTags = [],
+    existingCorrespondentList = [],
+    existingDocumentTypesList = [],
+    id,
+    customPrompt = null,
+    options = {}
+  ) {
     const cachePath = getThumbnailCachePath(id);
     try {
       this.initialize();
       const now = new Date();
-      const timestamp = now.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+      const timestamp = now.toLocaleString('de-DE', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      });
 
       if (!this.client) {
         throw new Error('Custom OpenAI client not initialized');
@@ -168,8 +225,14 @@ class CustomOpenAIService {
         await fs.writeFile(cachePath, thumbnailData);
       }
 
-      // Format existing tags
-      let existingTagsList = existingTags.join(', ');
+      // Format existing data - callers may hand over entity objects or plain names
+      const existingTagNames = toNameList(existingTags).join(', ');
+      const existingCorrespondentNames = toNameList(
+        existingCorrespondentList
+      ).join(', ');
+      const existingDocumentTypeNames = toNameList(
+        existingDocumentTypesList
+      ).join(', ');
 
       // Get external API data if available and validate it
       let externalApiData = options.externalApiData || null;
@@ -177,10 +240,14 @@ class CustomOpenAIService {
 
       if (externalApiData) {
         try {
-          validatedExternalApiData = await this._validateAndTruncateExternalApiData(externalApiData);
+          validatedExternalApiData =
+            await this._validateAndTruncateExternalApiData(externalApiData);
           console.log('[DEBUG] External API data validated and included');
         } catch (error) {
-          console.warn('[WARNING] External API data validation failed:', error.message);
+          console.warn(
+            '[WARNING] External API data validation failed:',
+            error.message
+          );
           validatedExternalApiData = null;
         }
       }
@@ -194,7 +261,8 @@ class CustomOpenAIService {
       try {
         customFieldsObj = JSON.parse(process.env.CUSTOM_FIELDS);
       } catch (error) {
-        console.error(`Failed to parse CUSTOM_FIELDS: ${error.message}`); console.debug(error);
+        console.error(`Failed to parse CUSTOM_FIELDS: ${error.message}`);
+        console.debug(error);
         customFieldsObj = { custom_fields: [] };
       }
 
@@ -204,34 +272,48 @@ class CustomOpenAIService {
       customFieldsObj.custom_fields.forEach((field, index) => {
         let valueHint;
         if (field.data_type === 'date') {
-          valueHint = "Fill in the date in ISO 8601 format (YYYY-MM-DD) based on your analysis";
+          valueHint =
+            'Fill in the date in ISO 8601 format (YYYY-MM-DD) based on your analysis';
         } else if (field.data_type === 'boolean') {
           valueHint = "Fill in 'true' or 'false' based on your analysis";
         } else {
-          valueHint = "Fill in the value based on your analysis";
+          valueHint = 'Fill in the value based on your analysis';
         }
         customFieldsTemplate[index] = {
           field_name: field.value,
-          value: valueHint
+          value: valueHint,
         };
       });
 
       // Convert template to string for replacement and wrap in custom_fields
-      const customFieldsStr = '"custom_fields": ' + JSON.stringify(customFieldsTemplate, null, 2)
-        .split('\n')
-        .map(line => '    ' + line)  // Add proper indentation
-        .join('\n');
+      const customFieldsStr =
+        '"custom_fields": ' +
+        JSON.stringify(customFieldsTemplate, null, 2)
+          .split('\n')
+          .map((line) => '    ' + line) // Add proper indentation
+          .join('\n');
 
       // Get system prompt based on configuration
-      if (config.useExistingData === 'yes' && config.restrictToExistingTags === 'no' && config.restrictToExistingCorrespondents === 'no') {
-        systemPrompt = `
-        Pre-existing tags: ${existingTagsList}\n\n
-        Pre-existing correspondents: ${existingCorrespondentList}\n\n
-        Pre-existing document types: ${existingDocumentTypesList.join(', ')}\n\n
-        ` + process.env.SYSTEM_PROMPT + '\n\n' + config.mustHavePrompt.replace('%CUSTOMFIELDS%', customFieldsStr);
+      if (
+        config.useExistingData === 'yes' &&
+        config.restrictToExistingTags === 'no' &&
+        config.restrictToExistingCorrespondents === 'no'
+      ) {
+        systemPrompt =
+          `
+        Pre-existing tags: ${existingTagNames}\n\n
+        Pre-existing correspondents: ${existingCorrespondentNames}\n\n
+        Pre-existing document types: ${existingDocumentTypeNames}\n\n
+        ` +
+          process.env.SYSTEM_PROMPT +
+          '\n\n' +
+          config.mustHavePrompt.replace('%CUSTOMFIELDS%', customFieldsStr);
         promptTags = '';
       } else {
-        const mustHavePrompt = config.mustHavePrompt.replace('%CUSTOMFIELDS%', customFieldsStr);
+        const mustHavePrompt = config.mustHavePrompt.replace(
+          '%CUSTOMFIELDS%',
+          customFieldsStr
+        );
         systemPrompt = process.env.SYSTEM_PROMPT + '\n\n' + mustHavePrompt;
         promptTags = '';
       }
@@ -241,8 +323,7 @@ class CustomOpenAIService {
         systemPrompt,
         existingTags,
         existingCorrespondentList,
-        existingDocumentTypesList,
-        config
+        existingDocumentTypesList
       );
 
       // Include validated external API data if available
@@ -252,7 +333,8 @@ class CustomOpenAIService {
 
       if (process.env.USE_PROMPT_TAGS === 'yes') {
         promptTags = process.env.PROMPT_TAGS;
-        systemPrompt = `
+        systemPrompt =
+          `
         Take these tags and try to match one or more to the document content.\n\n
         ` + config.specialPromptPreDefinedTags;
       }
@@ -260,7 +342,10 @@ class CustomOpenAIService {
       // Custom prompt override if provided
       if (customPrompt) {
         console.log('[DEBUG] Replace system prompt with custom prompt');
-        systemPrompt = customPrompt + '\n\n' + config.mustHavePrompt.replace('%CUSTOMFIELDS%', customFieldsStr);
+        systemPrompt =
+          customPrompt +
+          '\n\n' +
+          config.mustHavePrompt.replace('%CUSTOMFIELDS%', customFieldsStr);
       }
 
       // Calculate tokens AFTER all prompt modifications are complete
@@ -274,17 +359,33 @@ class CustomOpenAIService {
       const reservedTokens = totalPromptTokens + Number(config.responseTokens);
       const availableTokens = maxTokens - reservedTokens;
 
-      // Validate that we have positive available tokens
-      if (availableTokens <= 0) {
-        console.warn(`[WARNING] No available tokens for content. Reserved: ${reservedTokens}, Max: ${maxTokens}`);
-        throw new Error('Token limit exceeded: prompt too large for available token limit');
+      // Validate that we have positive available tokens. A non-finite budget
+      // is the same failure: it slips past a bare `<= 0` and truncates the
+      // document down to nothing instead of stopping.
+      if (!Number.isFinite(availableTokens) || availableTokens <= 0) {
+        console.warn(
+          `[WARNING] No available tokens for content. Reserved: ${reservedTokens}, Max: ${maxTokens}`
+        );
+        throw new Error(
+          'Token limit exceeded: prompt too large for available token limit'
+        );
       }
 
-      console.log(`[DEBUG] Token calculation - Prompt: ${totalPromptTokens}, Reserved: ${reservedTokens}, Available: ${availableTokens}`);
-      console.log(`[DEBUG] Use existing data: ${config.useExistingData}, Restrictions applied based on useExistingData setting`);
-      console.log(`[DEBUG] External API data: ${validatedExternalApiData ? 'included' : 'none'}`);
+      console.log(
+        `[DEBUG] Token calculation - Prompt: ${totalPromptTokens}, Reserved: ${reservedTokens}, Available: ${availableTokens}`
+      );
+      console.log(
+        `[DEBUG] Use existing data: ${config.useExistingData}, Restrictions applied based on useExistingData setting`
+      );
+      console.log(
+        `[DEBUG] External API data: ${validatedExternalApiData ? 'included' : 'none'}`
+      );
 
-      const truncatedContent = await truncateToTokenLimit(content, availableTokens, model);
+      const truncatedContent = await truncateToTokenLimit(
+        content,
+        availableTokens,
+        model
+      );
 
       // console.log('######################################################################');
       // console.log(`[DEBUG] Content length: ${content.length}, Truncated content length: ${truncatedContent.length}`);
@@ -293,31 +394,35 @@ class CustomOpenAIService {
       // console.log(`[DEBUG] Prompt tags: ${promptTags}`);
       // console.log(`[DEBUG] Model: ${model}`);
       // console.log(`[DEBUG] Custom fields: ${customFieldsStr}`);
-      // console.log(`[DEBUG] Existing tags: ${existingTagsList}`);
-      // console.log(`[DEBUG] Existing correspondents: ${existingCorrespondentList}`);
+      // console.log(`[DEBUG] Existing tags: ${existingTagNames}`);
+      // console.log(`[DEBUG] Existing correspondents: ${existingCorrespondentNames}`);
       // console.log(`[DEBUG] Custom prompt: ${customPrompt}`);
       // console.log(`[DEBUG] External API data: ${validatedExternalApiData}`);
       // console.log('######################################################################');
-
 
       const response = await this.client.chat.completions.create({
         model: model,
         messages: [
           {
-            role: "system",
-            content: systemPrompt
+            role: 'system',
+            content: systemPrompt,
           },
           {
-            role: "user",
-            content: truncatedContent
-          }
+            role: 'user',
+            content: truncatedContent,
+          },
         ],
         temperature: config.aiTemperatureAnalysis,
-        ...this.chatRequestExtras
+        ...this.chatRequestExtras,
       });
 
       // Handle response
       //console.log(`MESSAGE: ${response?.choices?.[0]?.message?.content}`);
+      assertCompletionNotTruncated(
+        response,
+        'Custom OpenAI',
+        'Reduce the number of custom fields the prompt asks for, or use a model with a larger completion limit.'
+      );
       const message = response?.choices?.[0]?.message;
       let jsonContent = extractChatMessageContent(message, 'Custom OpenAI');
       if (!jsonContent) {
@@ -326,13 +431,15 @@ class CustomOpenAIService {
 
       // Log token usage
       console.log(`[DEBUG] [${timestamp}] Custom OpenAI request sent`);
-      console.log(`[DEBUG] [${timestamp}] Total tokens: ${response.usage.total_tokens}`);
+      console.log(
+        `[DEBUG] [${timestamp}] Total tokens: ${response.usage.total_tokens}`
+      );
 
       const usage = response.usage;
       const mappedUsage = {
         promptTokens: usage.prompt_tokens,
         completionTokens: usage.completion_tokens,
-        totalTokens: usage.total_tokens
+        totalTokens: usage.total_tokens,
       };
 
       let parsedResponse;
@@ -341,7 +448,8 @@ class CustomOpenAIService {
         parsedResponse = parsedResult.parsed;
         jsonContent = parsedResult.normalized;
       } catch (error) {
-        console.error(`Failed to parse JSON response: ${error.message}`); console.debug(error);
+        console.error(`Failed to parse JSON response: ${error.message}`);
+        console.debug(error);
         throw error;
       }
 
@@ -353,14 +461,21 @@ class CustomOpenAIService {
       }
 
       // Validate response structure
-      if (!parsedResponse || !Array.isArray(parsedResponse.tags) || (typeof parsedResponse.correspondent !== 'string' && parsedResponse.correspondent !== null)) {
-        throw new Error('AI could not determine assignable metadata: no tags or correspondent found');
+      if (
+        !parsedResponse ||
+        !Array.isArray(parsedResponse.tags) ||
+        (typeof parsedResponse.correspondent !== 'string' &&
+          parsedResponse.correspondent !== null)
+      ) {
+        throw new Error(
+          'AI could not determine assignable metadata: no tags or correspondent found'
+        );
       }
 
       return {
         document: parsedResponse,
         metrics: mappedUsage,
-        truncated: truncatedContent.length < content.length
+        truncated: truncatedContent.length < content.length,
       };
     } catch (error) {
       const normalizedMessage = isTimeoutError(error)
@@ -368,7 +483,9 @@ class CustomOpenAIService {
         : error.message;
 
       if (isTimeoutError(error)) {
-        console.error(`[TIMEOUT][AI] Custom provider request timed out: ${error.message}`);
+        console.error(
+          `[TIMEOUT][AI] Custom provider request timed out: ${error.message}`
+        );
       }
 
       console.error(`Failed to analyze document: ${normalizedMessage}`);
@@ -376,7 +493,10 @@ class CustomOpenAIService {
       return {
         document: { tags: [], correspondent: null },
         metrics: null,
-        error: normalizedMessage
+        error: normalizedMessage,
+        // Undefined for everything that is not one of ours; the scan loop
+        // falls back to its generic reason then.
+        errorCode: error.code,
       };
     }
   }
@@ -392,170 +512,194 @@ class CustomOpenAIService {
       return null;
     }
 
-    const dataString = typeof apiData === 'object'
-      ? JSON.stringify(apiData, null, 2)
-      : String(apiData);
+    const dataString =
+      typeof apiData === 'object'
+        ? JSON.stringify(apiData, null, 2)
+        : String(apiData);
 
     // Calculate tokens for the data
-    const dataTokens = await calculateTokens(dataString, this.providerConfig.model);
+    const dataTokens = await calculateTokens(
+      dataString,
+      this.providerConfig.model
+    );
 
     if (dataTokens > maxTokens) {
-      console.warn(`[WARNING] External API data (${dataTokens} tokens) exceeds limit (${maxTokens}), truncating`);
-      return await truncateToTokenLimit(dataString, maxTokens, this.providerConfig.model);
+      console.warn(
+        `[WARNING] External API data (${dataTokens} tokens) exceeds limit (${maxTokens}), truncating`
+      );
+      return await truncateToTokenLimit(
+        dataString,
+        maxTokens,
+        this.providerConfig.model
+      );
     }
 
     console.log(`[DEBUG] External API data validated: ${dataTokens} tokens`);
     return dataString;
   }
 
-  async analyzePlayground(content, prompt) {
-    const musthavePrompt = `
-    Return the result EXCLUSIVELY as a JSON object. The Tags and Title MUST be in the language that is used in the document.:  
-        {
-          "title": "xxxxx",
-          "correspondent": "xxxxxxxx",
-          "tags": ["Tag1", "Tag2", "Tag3", "Tag4"],
-          "document_date": "YYYY-MM-DD",
-          "language": "en/de/es/..."
-        }`;
-
-    try {
-      this.initialize();
-      const now = new Date();
-      const timestamp = now.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
-
-      if (!this.client) {
-        throw new Error('Custom OpenAI client not initialized - missing API key');
-      }
-
-      // Calculate total prompt tokens including musthavePrompt
-      const totalPromptTokens = await calculateTotalPromptTokens(
-        prompt + musthavePrompt // Combined system prompt
-      );
-
-      // Calculate available tokens
-      const maxTokens = Number(config.tokenLimit);
-      const reservedTokens = totalPromptTokens + Number(config.responseTokens);
-      const availableTokens = maxTokens - reservedTokens;
-
-      // Truncate content if necessary
-      const truncatedContent = await truncateToTokenLimit(content, availableTokens);
-
-      // Make API request
-      const response = await this.client.chat.completions.create({
-        model: this.providerConfig.model,
-        messages: [
-          {
-            role: "system",
-            content: prompt + musthavePrompt
-          },
-          {
-            role: "user",
-            content: truncatedContent
-          }
-        ],
-        temperature: config.aiTemperatureAnalysis,
-        ...this.chatRequestExtras
-      });
-
-      // Handle response
-      const message = response?.choices?.[0]?.message;
-      let jsonContent = extractChatMessageContent(message, 'Custom OpenAI');
-      if (!jsonContent) {
-        throw new Error('Invalid API response structure');
-      }
-
-      // Log token usage
-      console.log(`[DEBUG] [${timestamp}] Custom OpenAI request sent`);
-      console.log(`[DEBUG] [${timestamp}] Total tokens: ${response.usage.total_tokens}`);
-
-      const usage = response.usage;
-      const mappedUsage = {
-        promptTokens: usage.prompt_tokens,
-        completionTokens: usage.completion_tokens,
-        totalTokens: usage.total_tokens
-      };
-
-      let parsedResponse;
-      try {
-        const parsedResult = this._parseJsonResponse(jsonContent);
-        parsedResponse = parsedResult.parsed;
-        jsonContent = parsedResult.normalized;
-      } catch (error) {
-        console.error(`Failed to parse JSON response: ${error.message}`); console.debug(error);
-        throw error;
-      }
-
-      // Validate response structure
-      if (!parsedResponse || !Array.isArray(parsedResponse.tags) || (typeof parsedResponse.correspondent !== 'string' && parsedResponse.correspondent !== null)) {
-        throw new Error('AI could not determine assignable metadata: no tags or correspondent found');
-      }
-
-      return {
-        document: parsedResponse,
-        metrics: mappedUsage,
-        truncated: truncatedContent.length < content.length
-      };
-    } catch (error) {
-      console.error(`Failed to analyze document: ${error.message}`);
-      console.debug(error);
-      return {
-        document: { tags: [], correspondent: null },
-        metrics: null,
-        error: error.message
-      };
-    }
-  }
-
   /**
    * Generate text based on a prompt
    * @param {string} prompt - The prompt to generate text from
+   * @param {object} [options] - Optional overrides for this one call
+   * @param {string} [options.systemPrompt] - Sent as the system message
+   * @param {number} [options.temperature] - Overrides AI_TEMPERATURE_GENERATION
+   * @param {number} [options.maxTokens] - Overrides RESPONSE_TOKENS, still clamped
+   * @param {AbortSignal} [options.signal] - Cancels the request in flight
+   * @param {Function} [options.onProgress] - Streams the answer and reports it
+   *   as it grows; see GenerateTextProgress in aiGenerateOptions
+   * @param {boolean} [options.reasoning] - Switches the model's thinking off
+   *   or on for this one call; nothing new is sent when the caller says
+   *   nothing. Off also sends reasoning_effort where the model family takes it
    * @returns {Promise<string>} - The generated text
    */
-  async generateText(prompt) {
+  async generateText(prompt, options = {}) {
+    // Read before the try so the catch can tell a stopped request from a
+    // failed one.
+    const signal = abortSignal(options);
+    const onProgress = progressHandler(options);
+
     try {
       this.initialize();
 
       if (!this.client) {
-        throw new Error('Custom OpenAI client not initialized - missing API key');
+        throw new Error(
+          'Custom OpenAI client not initialized - missing API key'
+        );
       }
 
-      const model = this.providerConfig.model;
+      const model = modelOverride(options) || this.providerConfig.model;
       const maxContextTokens = Number(config.tokenLimit) || 128000;
-      const desiredCompletionTokens = Number(config.responseTokens) || 1000;
+      const desiredCompletionTokens =
+        hasNumber(options.maxTokens) && options.maxTokens > 0
+          ? Math.floor(options.maxTokens)
+          : Number(config.responseTokens) || 1000;
       const promptTokens = await calculateTokens(prompt, model);
-      const availableCompletionTokens = Math.max(1, maxContextTokens - promptTokens - 64);
-      const maxCompletionTokens = Math.max(1, Math.min(desiredCompletionTokens, availableCompletionTokens));
+      const availableCompletionTokens = Math.max(
+        1,
+        maxContextTokens - promptTokens - 64
+      );
+      const maxCompletionTokens = Math.max(
+        1,
+        Math.min(desiredCompletionTokens, availableCompletionTokens)
+      );
 
       if (maxCompletionTokens < desiredCompletionTokens) {
         console.log(
           `[DEBUG] Clamped max_tokens for custom generateText from ${desiredCompletionTokens} to ${maxCompletionTokens} ` +
-          `(context limit: ${maxContextTokens}, prompt tokens: ${promptTokens})`
+            `(context limit: ${maxContextTokens}, prompt tokens: ${promptTokens})`
         );
       }
 
-      const response = await this.client.chat.completions.create({
-        model: model,
-        messages: [
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        temperature: config.aiTemperatureGeneration,
-        max_tokens: maxCompletionTokens,
-        ...this.chatRequestExtras
+      const reasoning = reasoningEnabled(options);
+      const messages = [];
+      if (hasSystemPrompt(options)) {
+        messages.push({ role: 'system', content: options.systemPrompt });
+      }
+      messages.push({
+        role: 'user',
+        content:
+          reasoning === false && QWEN_MODEL_PATTERN.test(model)
+            ? `${prompt}\n${QWEN_NO_THINK_SWITCH}`
+            : prompt,
       });
 
-      const generatedText = extractChatMessageContent(response?.choices?.[0]?.message, 'Custom OpenAI');
+      const request = {
+        model: model,
+        messages,
+        temperature: hasNumber(options.temperature)
+          ? options.temperature
+          : config.aiTemperatureGeneration,
+        max_tokens: maxCompletionTokens,
+        ...this.chatRequestExtras,
+      };
+      // The key every OpenAI-compatible server that applies a chat template
+      // understands; one that does not know it passes it through and the
+      // model decides for itself, as it did before.
+      if (reasoning !== null) {
+        request.chat_template_kwargs = { enable_thinking: reasoning };
+      }
+      // A hosted reasoning model reads neither of the two above and thinks
+      // anyway; the families that take reasoning_effort are told in their own
+      // dialect. Only when the caller asked for no thinking, and only for
+      // those names — another model answers 400 for the field.
+      if (reasoning === false) {
+        const effort = reasoningEffortForCompatible(model);
+        if (effort) request.reasoning_effort = effort;
+      }
+
+      this.lastGenerateTextUsage = null;
+      // The second argument is the SDK's request option bag; a caller that
+      // brought no signal gets the call it always got.
+      const requestOptions = signal ? { signal } : null;
+
+      if (onProgress) {
+        // include_usage buys the exact completion count at the end of the
+        // stream; without it the report is an estimate all the way.
+        return await runChatCompletionStream({
+          client: this.client,
+          request: {
+            ...request,
+            stream: true,
+            stream_options: { include_usage: true },
+          },
+          requestOptions,
+          signal,
+          onProgress,
+          provider: 'Custom OpenAI',
+          remedy: TRUNCATION_REMEDY,
+          onUsage: (usage) => {
+            this.lastGenerateTextUsage = usage;
+          },
+        });
+      }
+
+      const response = requestOptions
+        ? await this.client.chat.completions.create(request, requestOptions)
+        : await this.client.chat.completions.create(request);
+      this.lastGenerateTextUsage = readCompletionUsage(response);
+
+      const message = response?.choices?.[0]?.message;
+      // Reasoning is no part of the answer, and a block the cut-off left
+      // open is no part of it either.
+      const generatedText = extractChatMessageContent(
+        { ...message, content: stripReasoningText(message?.content) },
+        'Custom OpenAI'
+      );
+
+      // After the text is in hand: a cut-off answer is still a failure, but
+      // the caller can keep the prefix instead of paying for it twice.
+      assertCompletionNotTruncated(
+        response,
+        'Custom OpenAI',
+        TRUNCATION_REMEDY,
+        { partialText: generatedText }
+      );
+
       if (!generatedText) {
-        throw new Error('Invalid API response structure');
+        // Say what came back: a gateway that timed out behind a 200, a
+        // model that stopped after its reasoning without an answer, or an
+        // empty choices array all end here and need telling apart.
+        const finishReason = response?.choices?.[0]?.finish_reason ?? 'unknown';
+        const head = JSON.stringify(response ?? null).slice(0, 200);
+        throw new Error(
+          `Invalid API response structure: the answer carried no text (finish_reason ${finishReason}; the response begins ${head})`
+        );
       }
 
       return generatedText;
     } catch (error) {
-      console.error(`Error generating text with Custom OpenAI: ${error.message}`); console.debug(error);
-      throw error;
+      // One name for a stopped request, whatever the client called it; an
+      // abort this service raised already carries its partial text.
+      const thrown =
+        isAbortError(error, signal) && error?.name !== 'AbortError'
+          ? abortedGenerationError(error, '')
+          : error;
+      console.error(
+        `Error generating text with Custom OpenAI: ${thrown.message}`
+      );
+      console.debug(thrown);
+      throw thrown;
     }
   }
 
@@ -564,7 +708,9 @@ class CustomOpenAIService {
       this.initialize();
 
       if (!this.client) {
-        throw new Error('Custom OpenAI client not initialized - missing API key');
+        throw new Error(
+          'Custom OpenAI client not initialized - missing API key'
+        );
       }
 
       const model = this.providerConfig.model;
@@ -574,7 +720,10 @@ class CustomOpenAIService {
 
       return { status: 'ok', model: model };
     } catch (error) {
-      console.error(`Error generating text with Custom OpenAI: ${error.message}`); console.debug(error);
+      console.error(
+        `Error generating text with Custom OpenAI: ${error.message}`
+      );
+      console.debug(error);
       return { status: 'error', error: error.message };
     }
   }

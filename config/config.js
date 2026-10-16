@@ -30,6 +30,25 @@ const LOG_LEVEL_WEIGHTS = {
 };
 const VALID_LOG_LEVELS = Object.keys(LOG_LEVEL_WEIGHTS);
 
+/* The date formats the interface offers. A locale's own idea of the order is
+   deliberately not among them: the dates sit in dense table cells without a
+   label, and an unadorned 08/09 has to mean one thing whoever is reading. Both
+   formats pad the month and day to two digits for the same reason — a column of
+   15.08.2026 and 3.9.2026 does not scan. */
+const VALID_DATE_FORMATS = ['DD.MM.YYYY', 'YYYY-MM-DD'];
+const DEFAULT_DATE_FORMAT = 'DD.MM.YYYY';
+
+const normalizeDateFormat = (value) => {
+  if (!value) {
+    return DEFAULT_DATE_FORMAT;
+  }
+
+  const normalized = String(value).trim().toUpperCase();
+  return VALID_DATE_FORMATS.includes(normalized)
+    ? normalized
+    : DEFAULT_DATE_FORMAT;
+};
+
 const normalizeLogLevel = (value) => {
   if (!value) {
     return 'info';
@@ -205,6 +224,24 @@ if (
   );
 }
 process.env.LOG_LEVEL = logLevel;
+
+/* Written back onto the environment so the settings view and the .env export,
+   which both read process.env directly, show the value the app actually renders
+   with rather than the typo an operator left behind. */
+const requestedDateFormat = process.env.DATE_FORMAT;
+const dateFormat = normalizeDateFormat(requestedDateFormat);
+if (
+  requestedDateFormat &&
+  String(requestedDateFormat).trim().toUpperCase() !== dateFormat
+) {
+  startupLog(
+    logLevel,
+    'warn',
+    `[WARN] Invalid DATE_FORMAT "${requestedDateFormat}". Falling back to "${dateFormat}".`
+  );
+}
+process.env.DATE_FORMAT = dateFormat;
+
 if (CONFIG_SOURCE_MODE === LEGACY_CONFIG_SOURCE_MODE) {
   startupLog(logLevel, 'debug', 'Loading legacy .env from:', envPath);
 } else {
@@ -250,6 +287,50 @@ const parseTemperature = (value, defaultValue, envKey) => {
   return parsed;
 };
 
+/* Token counts arrive as unvalidated environment strings and used to be read
+   with a bare Number() at each of the nine call sites. That was harmless while
+   the value only ever entered an addition — a NaN reservation just made the
+   context window NaN, which Ollama ignores. It stopped being harmless once the
+   value became a generation limit: "num_predict": null is a typo away. */
+const parseTokenCount = (value, defaultValue, envKey) => {
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedValue) {
+    return defaultValue;
+  }
+
+  const parsed = Number.parseInt(normalizedValue, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    startupLog(
+      logLevel,
+      'warn',
+      `[WARN] Invalid ${envKey} value "${normalizedValue}". Falling back to ${defaultValue}.`
+    );
+    return defaultValue;
+  }
+
+  return parsed;
+};
+
+/* parseTokenCount() hands anything Number.parseInt() can start reading to the
+   caller, so "128k" — a plausible shorthand for 128000 — parses as 128. For a
+   response budget that only shortens the answer, but for the context window it
+   silently shrinks the whole budget to 128 tokens and every document fails
+   with "Token limit exceeded". Reject trailing garbage before delegating. */
+const parseStrictTokenCount = (value, defaultValue, envKey) => {
+  const normalizedValue = String(value ?? '').trim();
+
+  if (normalizedValue && !/^[+-]?\d+$/.test(normalizedValue)) {
+    startupLog(
+      logLevel,
+      'warn',
+      `[WARN] Invalid ${envKey} value "${normalizedValue}". Falling back to ${defaultValue}.`
+    );
+    return defaultValue;
+  }
+
+  return parseTokenCount(normalizedValue, defaultValue, envKey);
+};
+
 const getApiKey = () =>
   process.env.API_KEY || process.env.PAPERLESS_AI_API_KEY || '';
 const getJwtSecret = () => process.env.JWT_SECRET || '';
@@ -286,6 +367,32 @@ const getCookieSecureMode = () => {
 
   return 'auto';
 };
+
+/* Single sign-on through OpenID Connect. Read on every call rather than
+   snapshotted at load, like the other auth getters above, so a runtime
+   override or a test can change it without reloading the module. Off unless
+   OIDC_ENABLED is set; password login keeps working either way. */
+const getOidcConfig = () => ({
+  enabled: parseEnvBoolean(process.env.OIDC_ENABLED, 'no') === 'yes',
+  issuerUrl: String(process.env.OIDC_ISSUER_URL || '').trim(),
+  clientId: String(process.env.OIDC_CLIENT_ID || '').trim(),
+  clientSecret: String(process.env.OIDC_CLIENT_SECRET || ''),
+  // Required: the identity whose e-mail matches signs in as the admin.
+  adminEmail: String(process.env.OIDC_ADMIN_EMAIL || '').trim(),
+  redirectUri: String(process.env.OIDC_REDIRECT_URI || '').trim(),
+  scopes: String(process.env.OIDC_SCOPES || 'openid profile email').trim(),
+  emailClaim: String(process.env.OIDC_EMAIL_CLAIM || 'email').trim() || 'email',
+  // An address the provider marks unverified is refused unless this is set.
+  allowUnverifiedEmail:
+    parseEnvBoolean(process.env.OIDC_ALLOW_UNVERIFIED_EMAIL, 'no') === 'yes',
+  // client_secret_basic | client_secret_post | none; empty = automatic.
+  tokenAuthMethod: String(process.env.OIDC_TOKEN_AUTH_METHOD || '').trim(),
+  // Login button appearance.
+  buttonText: String(process.env.OIDC_BUTTON_TEXT || '').trim(),
+  buttonIcon: String(process.env.OIDC_BUTTON_ICON || '').trim(),
+  buttonColor: String(process.env.OIDC_BUTTON_COLOR || '').trim(),
+  buttonTextColor: String(process.env.OIDC_BUTTON_TEXT_COLOR || '').trim(),
+});
 
 // Initialize limit functions with defaults
 const limitFunctions = {
@@ -352,13 +459,14 @@ startupLog(logLevel, 'info', 'Configuration loaded:', {
 });
 
 module.exports = {
-  PAPERLESS_AI_VERSION: 'v2026.07.04',
+  PAPERLESS_AI_VERSION: 'v2026.10.01',
   CONFIGURED: false,
   configSourceMode: CONFIG_SOURCE_MODE,
   getApiKey,
   getJwtSecret,
   getTrustProxy,
   getCookieSecureMode,
+  getOidcConfig,
   isProtectedRuntimeEnvKey,
   get apiKey() {
     return getApiKey();
@@ -373,8 +481,16 @@ module.exports = {
     return getCookieSecureMode();
   },
   logLevel,
+  // How every date in the interface is rendered. The browser gets it through a
+  // <meta> tag in the shell, so one setting covers server-rendered pages and
+  // the tables the page scripts build alike.
+  dateFormat,
+  validDateFormats: VALID_DATE_FORMATS,
   disableAutomaticProcessing: process.env.DISABLE_AUTOMATIC_PROCESSING || 'no',
   exposeApiDocs: parseEnvBoolean(process.env.EXPOSE_API_DOCS, 'no'),
+  // Contacts api.github.com once a day to compare release tags. Set to `no` in
+  // air-gapped installations or wherever the outbound call is unwanted.
+  updateCheckEnabled: parseEnvBoolean(process.env.UPDATE_CHECK_ENABLED, 'yes'),
   globalRateLimitWindowMs: parseInt(
     process.env.GLOBAL_RATE_LIMIT_WINDOW_MS || '900000',
     10
@@ -382,8 +498,22 @@ module.exports = {
   globalRateLimitMax: parseInt(process.env.GLOBAL_RATE_LIMIT_MAX || '1000', 10),
   predefinedMode: process.env.PROCESS_PREDEFINED_DOCUMENTS,
   ignoreTags: process.env.IGNORE_TAGS || '',
-  tokenLimit: process.env.TOKEN_LIMIT || 128000,
-  responseTokens: process.env.RESPONSE_TOKENS || 1000,
+  // The context window the provider is told to respect. Read through the
+  // strict parser: a NaN here used to travel all the way into
+  // truncateToTokenLimit(), which then sent the model an empty document.
+  tokenLimit: parseStrictTokenCount(
+    process.env.TOKEN_LIMIT,
+    128000,
+    'TOKEN_LIMIT'
+  ),
+  // How many tokens a provider may spend on its answer. Reserved in the
+  // context window and, where the provider offers a knob for it, sent as the
+  // generation limit — num_predict for Ollama, max_tokens for the rest.
+  responseTokens: parseTokenCount(
+    process.env.RESPONSE_TOKENS,
+    1000,
+    'RESPONSE_TOKENS'
+  ),
   // Minimum extracted-text length before a document is sent to AI analysis.
   // Documents below this are skipped or routed to OCR fallback. Default 10.
   minContentLength: parseInt(process.env.MIN_CONTENT_LENGTH || '10', 10),
@@ -399,6 +529,105 @@ module.exports = {
   ),
   addAIProcessedTag: process.env.ADD_AI_PROCESSED_TAG || 'no',
   addAIProcessedTags: process.env.AI_PROCESSED_TAG_NAME || 'ai-processed',
+  // Duplicates page: the configured AI provider may judge candidate pairs on
+  // request (Find duplicates, Ask the model). `no` keeps the model off the
+  // page, which then scans only; nothing runs on its own either way. The batch size is pairs per model request; the floor is the
+  // lowest matcher score a pair needs to be shown to the model at all.
+  duplicatesAiReview: parseEnvBoolean(process.env.DUPLICATES_AI_REVIEW, 'yes'),
+  duplicatesAiReviewBatchSize: parseInt(
+    process.env.DUPLICATES_AI_REVIEW_BATCH_SIZE || '25',
+    10
+  ),
+  duplicatesAiCandidateFloor: parseFloat(
+    process.env.DUPLICATES_AI_CANDIDATE_FLOOR || '0.6'
+  ),
+  // Evidence for the judge beyond names and titles: a short excerpt of the
+  // content of a couple of documents per entity, only for pairs the matcher
+  // linked by spelling alone (typo-like distance, prefix, word order). That
+  // is where a name pair such as "Kontoauszug" / "Kontoumzug" reads like a
+  // typo but means two different things.
+  duplicatesAiExcerpts: parseEnvBoolean(
+    process.env.DUPLICATES_AI_EXCERPTS,
+    'yes'
+  ),
+  duplicatesAiExcerptChars: parseInt(
+    process.env.DUPLICATES_AI_EXCERPT_CHARS || '300',
+    10
+  ),
+  duplicatesAiExcerptDocuments: parseInt(
+    process.env.DUPLICATES_AI_EXCERPT_DOCUMENTS || '2',
+    10
+  ),
+  // Optional: a stronger model of the configured provider for the judge
+  // only. Empty means the provider's configured model.
+  duplicatesAiModel: (process.env.DUPLICATES_AI_MODEL || '').trim(),
+  // The two brakes of a running review. The token budget is the most one
+  // review may spend across all its requests before it stops itself (0 = no
+  // limit); the idle stop ends a review nobody has been watching for that
+  // many seconds (0 = never), so a closed tab cannot leave the model running.
+  duplicatesAiTokenBudget: parseInt(
+    process.env.DUPLICATES_AI_TOKEN_BUDGET || '200000',
+    10
+  ),
+  duplicatesAiIdleStopSeconds: parseInt(
+    process.env.DUPLICATES_AI_IDLE_STOP_SECONDS || '60',
+    10
+  ),
+  // How the judge talks to the model. Thinking (the reasoning a model such
+  // as Qwen3 or DeepSeek-R1 writes before its answer) is off by default: it
+  // spends the whole answer budget before the first verdict and the judge
+  // gets evidence instead. The request seconds are the length one model
+  // request should take; the judge measures the model on a small first
+  // request and sizes every later one to fit.
+  duplicatesAiThinking: parseEnvBoolean(
+    process.env.DUPLICATES_AI_THINKING,
+    'no'
+  ),
+  duplicatesAiRequestSeconds: parseInt(
+    process.env.DUPLICATES_AI_REQUEST_SECONDS || '30',
+    10
+  ),
+  // Drift is prevented where it starts: when document analysis proposes a
+  // tag or correspondent whose name is a hard match of an existing one
+  // (case, umlauts, legal form, plural, word order), the existing one is
+  // used and the mapping is recorded for the Duplicates page. A typo-like
+  // match is only logged; the name is still created.
+  duplicatesGuardNewNames: parseEnvBoolean(
+    process.env.DUPLICATES_GUARD_NEW_NAMES,
+    'yes'
+  ),
+  // The semantic sweep shows the model the names of one kind, this many per
+  // request, and asks for groups the string matcher cannot see (synonyms,
+  // translations). Off unless the page asks for it.
+  duplicatesAiSweepNames: parseInt(
+    process.env.DUPLICATES_AI_SWEEP_NAMES || '300',
+    10
+  ),
+  // Model requests the AI judge keeps in flight at once. 0 means automatic:
+  // one for Ollama (a local model answers one request at a time anyway),
+  // three for every hosted endpoint. Wall time divides by it, tokens do not.
+  duplicatesAiConcurrency: parseInt(
+    process.env.DUPLICATES_AI_CONCURRENCY || '0',
+    10
+  ),
+  // How long the judge remembers a verdict about a pair of names, so the
+  // next review does not ask the model again while both names are unchanged.
+  // 0 switches the memory off.
+  duplicatesAiVerdictMemoryDays: parseInt(
+    process.env.DUPLICATES_AI_VERDICT_MEMORY_DAYS || '90',
+    10
+  ),
+  // "Simplify tags": how many tag names one model request decomposes into a
+  // document type and topic tags, and how many entries the proposed
+  // vocabulary should aim at.
+  simplifyTagsPerRequest: parseInt(
+    process.env.SIMPLIFY_TAGS_PER_REQUEST || '50',
+    10
+  ),
+  simplifyVocabularySize: parseInt(
+    process.env.SIMPLIFY_VOCABULARY_SIZE || '25',
+    10
+  ),
   // AI restrictions config
   restrictToExistingTags: aiRestrictions.restrictToExistingTags,
   restrictToExistingCorrespondents:
@@ -412,6 +641,15 @@ module.exports = {
       .replace(/\/+$/, '')
       .replace(/\/api$/i, ''),
     apiToken: process.env.PAPERLESS_API_TOKEN,
+    // Deadline for every single Paperless-ngx request. Axios ships with no
+    // timeout at all, so a host that accepts the connection and then goes
+    // quiet — a Paperless-ngx container that is still booting, which is
+    // exactly what a restart looks like — left the request pending for the
+    // lifetime of the process. Set to 0 to restore the unlimited behaviour.
+    requestTimeoutSeconds: parseInt(
+      process.env.PAPERLESS_REQUEST_TIMEOUT_SECONDS || '30',
+      10
+    ),
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
@@ -447,6 +685,33 @@ module.exports = {
     deploymentName: process.env.AZURE_DEPLOYMENT_NAME || '',
     apiVersion: process.env.AZURE_API_VERSION || '2023-05-15',
   },
+  // The Claude API speaks its own Messages dialect, so it is a provider of
+  // its own rather than a preset of `custom`. Request rules per model live in
+  // services/anthropicSupport.js.
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    // Empty means api.anthropic.com; set only for a proxy in front of it.
+    apiUrl: process.env.ANTHROPIC_API_URL || '',
+    model: process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5',
+    // low | medium | high | xhigh | max; empty leaves the model's default.
+    effort: String(process.env.ANTHROPIC_EFFORT || '')
+      .trim()
+      .toLowerCase(),
+    // Completion cap per request. Thinking counts toward it, which is why it
+    // is separate from RESPONSE_TOKENS.
+    maxTokens: parseTokenCount(
+      process.env.ANTHROPIC_MAX_TOKENS,
+      16000,
+      'ANTHROPIC_MAX_TOKENS'
+    ),
+    // Constrain the analysis answer to a JSON schema (output_config.format).
+    structuredOutput: parseEnvBoolean(
+      process.env.ANTHROPIC_STRUCTURED_OUTPUT,
+      'yes'
+    ),
+    // Mark the system prompt cacheable; it repeats for every document of a scan.
+    promptCaching: parseEnvBoolean(process.env.ANTHROPIC_PROMPT_CACHING, 'yes'),
+  },
   mistralOcr: {
     enabled: parseEnvBoolean(process.env.MISTRAL_OCR_ENABLED, 'no'),
     provider: String(
@@ -475,6 +740,22 @@ module.exports = {
     // OpenRouter-only: restrict chat routing and model discovery to
     // Zero-Data-Retention endpoints.
     openRouterZdr: parseEnvBoolean(process.env.OCR_OPENROUTER_ZDR, 'no'),
+    // Automatic draining of the OCR queue. Without it the queue is only
+    // emptied by hand via "Process All Pending" on the /ocr page.
+    autoProcessEnabled: parseEnvBoolean(
+      process.env.OCR_AUTO_PROCESS_ENABLED,
+      'no'
+    ),
+    autoProcessInterval:
+      process.env.OCR_AUTO_PROCESS_INTERVAL || '*/15 * * * *',
+    autoProcessBatchSize: parseInt(
+      process.env.OCR_AUTO_PROCESS_BATCH_SIZE || '10',
+      10
+    ),
+    // Run AI analysis right after OCR. Defaults to yes because a failed
+    // content write-back leaves the OCR text local-only, where a regular
+    // scan would never pick it up.
+    autoAnalyze: parseEnvBoolean(process.env.OCR_AUTO_ANALYZE, 'yes'),
   },
   customFields: process.env.CUSTOM_FIELDS || '',
   aiProvider: process.env.AI_PROVIDER || 'openai',
@@ -486,9 +767,42 @@ module.exports = {
     'yes'
   ),
   useExistingData: process.env.USE_EXISTING_DATA || 'no',
+  // Startup behaviour when Paperless-ngx is not reachable yet (e.g. both
+  // containers starting at the same time). The scan scheduler is armed
+  // regardless; this only controls how long the initial scan keeps retrying.
+  startup: {
+    paperlessRetryMinutes: parseInt(
+      process.env.STARTUP_PAPERLESS_RETRY_MINUTES || '30',
+      10
+    ),
+  },
+  // Health reporting: /health reflects scanner health, not just the database.
+  // strict=yes makes /health answer 503 while the scanner is degraded so the
+  // Docker healthcheck and monitoring can detect a stalled scan loop.
+  health: {
+    strict: parseEnvBoolean(process.env.HEALTHCHECK_STRICT, 'yes'),
+    scanFailureThreshold: parseInt(
+      process.env.HEALTH_SCAN_FAILURE_THRESHOLD || '3',
+      10
+    ),
+    // Standalone Paperless-ngx connectivity probe, independent of the scan
+    // loop. Without it the dashboard could only learn about an outage on the
+    // next scan tick — up to a full SCAN_INTERVAL late, or never when
+    // DISABLE_AUTOMATIC_PROCESSING=yes. Set to 0 to switch the probe off.
+    paperlessProbeIntervalSeconds: parseInt(
+      process.env.PAPERLESS_PROBE_INTERVAL_SECONDS || '60',
+      10
+    ),
+  },
   // Cache configuration (in seconds)
   // Recommended: 300 (5 min) for balanced performance, 60-900 (1-15 min) for custom needs
   tagCacheTTL: parseInt(process.env.TAG_CACHE_TTL_SECONDS || '300', 10),
+  // How long the assembled dashboard statistics payload stays valid. The
+  // dashboard polls its stats endpoint, so without this every poll of every
+  // open tab paid for two Paperless-ngx round trips and a dozen queries. The
+  // scan loop invalidates the cache as it processes documents, so a low value
+  // buys little beyond faster reaction to changes made outside this app.
+  statsCacheTTL: parseInt(process.env.STATS_CACHE_TTL_SECONDS || '60', 10),
   // Add limit functions to config
   limitFunctions: {
     activateTagging: limitFunctions.activateTagging,

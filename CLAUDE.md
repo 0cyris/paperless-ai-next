@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Paperless-AI **next** — a community fork of clusterzx/paperless-ai. A Node.js/Express app that uses
-LLMs (OpenAI, Ollama, Azure, or any OpenAI-compatible "custom" endpoint) plus optional OCR to auto-tag,
+LLMs (OpenAI, Ollama, Azure, Anthropic, or any OpenAI-compatible "custom" endpoint) plus optional OCR to auto-tag,
 title, classify, and extract metadata for documents in a Paperless-ngx instance. Server-rendered EJS UI,
 no frontend framework. Single SQLite database (better-sqlite3, WAL mode).
 
@@ -22,12 +22,13 @@ node server.js                     # plain run
 # Tests (custom runner — plain node scripts, no jest/mocha)
 npm run test:all                   # all tests          (node scripts/run-tests.js --all)
 npm run test:list                  # list areas + tests
-npm run test:area:security         # run an area (auth|ocr|observability|processing|prompts|security)
+npm run test:area:security         # an area (auth|ocr|observability|processing|prompts|quickstart|security)
 node scripts/run-tests.js --test ssrf-url-validation   # single test by name
 
 # Lint / format
 npx eslint .                       # flat config: eslint.config.mjs
 npx prettier --check .             # .prettierrc.json + .prettierignore
+npm run lint:css                   # stylelint over public/css/**/*.css
 
 # Production (what Docker runs)
 pm2-runtime ecosystem.config.js    # via start-services.sh
@@ -53,20 +54,28 @@ the `services/` singletons.
 `class Foo { ... }; module.exports = new Foo();`. Import and call directly; do not `new` them.
 
 **AI provider abstraction:** `services/aiServiceFactory.js` returns the right service based on
-`config.aiProvider` (`openai` | `ollama` | `custom` | `azure`). Every provider service implements
+`config.aiProvider` (`openai` | `ollama` | `custom` | `azure` | `anthropic`). Every provider service implements
 `analyzeDocument(content, doc, existingTags, correspondents)`. To add a provider: add a service singleton,
 wire it into the factory switch, and add its config block in `config/config.js`.
 
-**Token handling:** `services/serviceUtils.js` — `calculateTokens()` (tiktoken for OpenAI, ÷4 char
-estimate otherwise) and `truncateToTokenLimit()`. Also holds AI-error → OCR-fallback classification
+**Anthropic** is not OpenAI-compatible and has its own service (`services/anthropicService.js`). Per-model
+request rules (thinking, effort, structured output, cache minimums), the client factory, usage mapping and
+the truncation/refusal check live in `services/anthropicSupport.js` and are shared with Claude OCR; never
+send `temperature` to it or read `content[0]`. Its analysis prompt and JSON schema come from
+`services/analysisPrompt.js`, which the other providers do not use yet.
+
+**Token handling:** `services/serviceUtils.js` — `calculateTokens()` (tiktoken for OpenAI, ÷3 char
+estimate for `claude-*`, ÷4 otherwise) and `truncateToTokenLimit()`. Also holds AI-error → OCR-fallback classification
 helpers used by the scan loop.
 
 **Prompt restrictions:** `services/restrictionPromptService.js` replaces placeholders like
-`%RESTRICTED_TAGS%`, `%RESTRICTED_CORRESPONDENTS%`, `%CUSTOMFIELDS%` in prompts. The base prompts live
-in `config/config.js` (`specialPromptPreDefinedTags`, `mustHavePrompt`).
+`%RESTRICTED_TAGS%`, `%RESTRICTED_CORRESPONDENTS%`, `%RESTRICTED_DOCUMENT_TYPES%`, `%CUSTOMFIELDS%`
+in prompts. The base prompts live in `config/config.js` (`specialPromptPreDefinedTags`,
+`mustHavePrompt`). Entity lists reach the services as either `[{ id, name }]` or `['name']` —
+normalize them with `toNameList()` from `services/serviceUtils.js` instead of joining them directly.
 
 **OCR:** `services/mistralOcrService.js` — provider can be `mistral`, `ollama` (native `/api/chat`
-vision), or OpenAI-compatible `/v1`. OCR is a fallback path when AI analysis fails on low-text docs.
+vision), OpenAI-compatible `/v1`, or `anthropic` (Claude reads PDFs and images natively). OCR is a fallback path when AI analysis fails on low-text docs.
 
 **Database:** `models/document.js` — better-sqlite3 at `data/documents.db`, WAL mode, prepared
 statements throughout. Key tables: `processed_documents`, `history_documents` (server-side paginated
@@ -81,6 +90,37 @@ cleans up records for documents deleted in Paperless-ngx.
 
 **Routes:** `routes/auth.js` (JWT-in-cookie + `x-api-key` auth, `isAuthenticated` middleware) and
 `routes/setup.js` (setup wizard + history/api endpoints). `schemas.js` holds shared swagger schemas.
+
+### UI layer ("zr")
+
+There is no frontend framework and no build step — `public/` is served as written. What replaced
+Tailwind/FontAwesome is a small in-house system whose rules are not obvious from any single file:
+
+**CSS cascade layers are the whole design.** `public/css/tokens.css` opens with the order —
+`@layer tokens, base, shell, components, modules, pages, utilities` — and every rule in every file
+sits in one of them. A later layer beats an earlier one _regardless of specificity_, so a component
+overrides a base primitive with a plain single-class selector, `pages/*.css` beats the framework, and
+the colour utilities beat everything. Two consequences worth knowing before editing: a rule written
+in the wrong file silently loses (or wins) no matter how specific it is, and every file must stay
+layered — one unlayered rule would outrank the lot. Only two link positions in `head-start.ejs` are
+load-bearing: tokens.css first, and buttons.css before forms.css.
+
+**Page behaviour is one ES module per job.** `public/js/zr.js` is the kernel: theme, drawer, rail,
+active nav, the toast, and a registry that imports `public/js/modules/<name>.js` for each
+`data-module="<name>"` it finds. A page therefore costs its own modules and nothing else. Classic
+scripts (`public/js/*.js`) cannot import ES modules — they reach the kernel through
+`window.__zrToast` / `window.zrDialog` (see `failed.js` for the six-line adapter) and must never
+build their own toast host.
+
+**Conventions that bite if missed:** icons are `<symbol>`s in `public/icons.svg`, referenced with
+`<use href="/icons.svg#i-name">` — there is no icon font, so `querySelector('i')` finds nothing;
+`.hidden` is a deliberate `!important` class that JS toggles ~100×; `/styleguide` (dev builds only,
+authenticated) renders every component once and is the place to check before inventing a class.
+
+**Verifying UI work:** the app cannot be opened without a database and a Paperless-ngx instance, so
+UI changes are reviewed with a throwaway Express server that renders the EJS views with mock locals
+and mock API endpoints. Review list pages _with rows_ — a migration bug once hid in the queue tables
+because they were only ever looked at empty.
 
 ### Document processing flow (the core loop in server.js)
 
@@ -110,9 +150,10 @@ config object you set in code; everything is an env var.**
 
 ## CI
 
-Every PR runs `.github/workflows/ci.yml`: ESLint + Prettier on the **files changed in the PR**
-(the legacy codebase is not fully clean yet — anything you touch must pass), the offline test suite
-(`node scripts/run-tests.js --all`), and an OpenAPI drift check (`regen-openapi.js` + `git diff`).
+Every PR runs `.github/workflows/ci.yml`: ESLint, Prettier and stylelint on the **files changed in
+the PR** (the legacy codebase is not fully clean yet — anything you touch must pass), the offline
+test suite (`node scripts/run-tests.js --all`), and an OpenAPI drift check
+(`regen-openapi.js` + `git diff`).
 PRs touching Docker/dependency manifests additionally trigger `docker-check.yml` (build-only).
 `security-audit.yml` runs `npm audit` weekly on a schedule.
 
@@ -132,6 +173,9 @@ PRs touching Docker/dependency manifests additionally trigger `docker-check.yml`
 - **API responses:** `{ success: true, data, message }` / `{ success: false, error }`.
 - **SSE:** set `X-Accel-Buffering: no` and call `res.flush()` after each `res.write(...)`.
 - **DataTables endpoints** expect `{ data, recordsTotal, recordsFiltered }`.
+- **Stylelint guards the stylesheets:** duplicate selectors, duplicate properties and unquoted font
+  names fail the build. The duplicate check scopes per `@layer` block, so keep one layer block per
+  file. `no-descending-specificity` is off — it is structurally at odds with cascade layers.
 
 ## Docs
 

@@ -9,20 +9,16 @@ let manualSearchController = null;
 // Show message (error or success)
 function showMessage(message, type = 'error') {
     const messageArea = document.getElementById('messageArea');
-    const alertClass = type === 'error' ? 'theme-alert-error' : 'theme-alert-success';
-    const iconClass = type === 'error' ? 'fa-exclamation-circle text-red-400' : 'fa-check-circle text-green-400';
+    const tone = type === 'error' ? 'danger' : 'ok';
+    const symbol = type === 'error' ? 'i-alert-circle' : 'i-check-circle';
 
-    messageArea.className = `mb-4 p-4 rounded-md border ${alertClass}`;
+    messageArea.className = `zr-alert zr-alert--${tone}`;
     messageArea.innerHTML = `
-        <div class="flex">
-            <div class="flex-shrink-0">
-                <i class="fas ${iconClass}"></i>
-            </div>
-            <div class="ml-3">
-                <p class="text-sm">${message}</p>
-            </div>
-        </div>
+        <svg class="zr-icon" aria-hidden="true"><use href="/icons.svg#${symbol}"/></svg>
+        <div class="zr-alert__body"><p class="zr-sm" data-message-text></p></div>
     `;
+    // The message can carry server text, so it is set as text, not markup.
+    messageArea.querySelector('[data-message-text]').textContent = message;
     messageArea.classList.remove('hidden');
 
     setTimeout(() => {
@@ -162,7 +158,7 @@ function updateSuggestedTags(tags) {
     suggestedTags.innerHTML = '';
     
     tags.forEach(tag => {
-        const tagElement = createTagElement(tag, 'blue', true);
+        const tagElement = createTagElement(tag, true);
         if (tagElement) {
             suggestedTags.appendChild(tagElement);
         }
@@ -170,7 +166,19 @@ function updateSuggestedTags(tags) {
 }
 
 // Tag Management Functions
-function createTagElement(tag, color = 'gray', isSuggested = false) {
+
+// A chip button in the shape settings.ejs and the styleguide use: the icon
+// alone, so it needs a label of its own.
+function createChipButton(icon, label) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'zr-link';
+    button.setAttribute('aria-label', label);
+    button.innerHTML = `<svg class="zr-icon" aria-hidden="true"><use href="/icons.svg#${icon}"/></svg>`;
+    return button;
+}
+
+function createTagElement(tag, isSuggested = false) {
     if (!tag) return null;
 
     // If tag is just an ID string/number, look up the full tag object in availableTags
@@ -182,29 +190,18 @@ function createTagElement(tag, color = 'gray', isSuggested = false) {
     const tagId = fullTag.id;
     const tagName = fullTag.name;
 
-    const tagElement = document.createElement('span');
-    tagElement.className = `inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-${color}-100 text-${color}-800`;
+    // Suggestions are not on the document yet; the modifier sets them apart
+    // from the tags it already carries.
+    const tagElement = document.createElement('div');
+    tagElement.className = isSuggested ? 'zr-chip manual-chip--suggested' : 'zr-chip';
     tagElement.dataset.tagId = tagId;
-    
+
     const nameSpan = document.createElement('span');
     nameSpan.textContent = tagName;
     tagElement.appendChild(nameSpan);
 
-    const removeButton = document.createElement('button');
-    removeButton.className = `ml-1 text-${color}-600 hover:text-${color}-800`;
-    removeButton.innerHTML = '<i class="fas fa-times"></i>';
-    removeButton.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        tagElement.remove();
-        updateHiddenTagsInput(); // Update hidden input when tag is removed
-    };
-    tagElement.appendChild(removeButton);
-
     if (isSuggested) {
-        const addButton = document.createElement('button');
-        addButton.className = `ml-1 text-${color}-600 hover:text-${color}-800`;
-        addButton.innerHTML = '<i class="fas fa-plus"></i>';
+        const addButton = createChipButton('i-plus', `Add ${tagName}`);
         addButton.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -217,6 +214,18 @@ function createTagElement(tag, color = 'gray', isSuggested = false) {
         };
         tagElement.appendChild(addButton);
     }
+
+    const removeButton = createChipButton(
+        'i-x',
+        isSuggested ? `Dismiss ${tagName}` : `Remove ${tagName}`
+    );
+    removeButton.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        tagElement.remove();
+        updateHiddenTagsInput(); // Update hidden input when tag is removed
+    };
+    tagElement.appendChild(removeButton);
 
     return tagElement;
 }
@@ -235,10 +244,19 @@ function updateHiddenTagsInput() {
     }
 }
 
+// The tag controls only make sense with a document loaded; keep them in
+// step with the analyze button.
+function setDocumentActionsEnabled(enabled) {
+    ['analyzeBtn', 'saveTagsBtn', 'addTagBtn', 'newTagSelect'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !enabled;
+    });
+}
+
 // Document Handling Functions
 async function handleDocumentSelection(documentId) {
     if (!documentId) {
-        document.getElementById('analyzeBtn').disabled = true;
+        setDocumentActionsEnabled(false);
         document.getElementById('contentPreview').textContent = '';
         document.getElementById('currentTags').innerHTML = '';
         document.getElementById('suggestedTags').innerHTML = '';
@@ -247,7 +265,7 @@ async function handleDocumentSelection(documentId) {
     }
 
     currentDocument = documentId;
-    document.getElementById('analyzeBtn').disabled = false;
+    setDocumentActionsEnabled(true);
     
     try {
         const response = await fetch(`/manual/preview/${documentId}`);
@@ -267,7 +285,7 @@ async function handleDocumentSelection(documentId) {
         if (data.tags && Array.isArray(data.tags)) {
             const currentTagsContainer = document.getElementById('currentTags');
             data.tags.forEach(tag => {
-                const tagElement = createTagElement(tag, 'gray', false);
+                const tagElement = createTagElement(tag);
                 if (tagElement) {
                     currentTagsContainer.appendChild(tagElement);
                 }
@@ -296,7 +314,7 @@ async function handleAnalysis() {
             throw new Error('No document content available for analysis');
         }
 
-        if(content.length > 50000) {
+        if(content.length> 50000) {
             content = content.substring(0, 50000);
         }
 
@@ -450,7 +468,7 @@ function serializeFormWithoutEmptyTags(formElement) {
 
     const object = {};
     formData.forEach((value, key) => {
-        if (key !== 'tags' || currentTags.children.length > 0) {
+        if (key !== 'tags' || currentTags.children.length> 0) {
             object[key] = value;
         }
     });

@@ -1,47 +1,6 @@
 //settings.js
 
-/* global Swal, tippy, Sortable */
-
-class SettingsTabsManager {
-  constructor() {
-    this.buttons = Array.from(
-      document.querySelectorAll('.settings-tab-button')
-    );
-    this.contents = Array.from(
-      document.querySelectorAll('.settings-tab-content')
-    );
-    this.initialize();
-  }
-
-  initialize() {
-    if (this.buttons.length === 0 || this.contents.length === 0) {
-      return;
-    }
-
-    this.buttons.forEach((button) => {
-      button.addEventListener('click', () => {
-        const tabId = button.dataset.tab;
-        this.activateTab(tabId);
-      });
-    });
-  }
-
-  activateTab(tabId) {
-    this.buttons.forEach((button) => {
-      const isActive = button.dataset.tab === tabId;
-      button.classList.toggle('active', isActive);
-      button.classList.toggle('border-blue-500', isActive);
-      button.classList.toggle('border-transparent', !isActive);
-    });
-
-    this.contents.forEach((content) => {
-      const isActive = content.id === tabId;
-      content.classList.toggle('hidden', !isActive);
-    });
-
-    refreshSettingsHints();
-  }
-}
+/* global Sortable, zrDialog */
 
 class FormManager {
   constructor() {
@@ -156,6 +115,7 @@ class FormManager {
     const customSettings = document.getElementById('customSettings');
     const openrouterSettings = document.getElementById('openrouterSettings');
     const azureSettings = document.getElementById('azureSettings');
+    const anthropicSettings = document.getElementById('anthropicSettings');
 
     // Get all provider-specific fields
     const openaiKey = document.getElementById('openaiKey');
@@ -186,6 +146,13 @@ class FormManager {
     customSettings.classList.add('hidden');
     openrouterSettings.classList.add('hidden');
     azureSettings.classList.add('hidden');
+    anthropicSettings?.classList.add('hidden');
+
+    // Claude models reject sampling parameters, so the temperature fields
+    // stay (they apply again after switching back) but say they are ignored.
+    document.querySelectorAll('[data-anthropic-hint]').forEach((hint) => {
+      hint.classList.toggle('hidden', provider !== 'anthropic');
+    });
 
     // Reset all required fields
     openaiKey.required = false;
@@ -225,9 +192,12 @@ class FormManager {
         azureDeploymentName.required = true;
         azureApiVersion.required = true;
         break;
+      case 'anthropic':
+        // Nothing is required here: an empty key keeps the stored one (the
+        // save route refuses when there is none), and the model has a default.
+        anthropicSettings?.classList.remove('hidden');
+        break;
     }
-
-    refreshSettingsHints();
   }
 
   // Rest of the class methods remain the same
@@ -261,8 +231,6 @@ class FormManager {
     } else {
       aiTagNameSection.classList.add('hidden');
     }
-
-    refreshSettingsHints();
   }
 
   togglePromptTagsInput() {
@@ -280,8 +248,6 @@ class FormManager {
       promptTagsSection.classList.add('hidden');
       this.enablePromptElements();
     }
-
-    refreshSettingsHints();
   }
 
   disablePromptElements() {
@@ -315,31 +281,50 @@ class FormManager {
 
   togglePassword(inputId) {
     const input = document.getElementById(inputId);
-    const icon = input.nextElementSibling.querySelector('i');
+    if (!input) return;
 
-    if (input.type === 'password') {
-      input.type = 'text';
-      icon.classList.remove('fa-eye');
-      icon.classList.add('fa-eye-slash');
-    } else {
-      input.type = 'password';
-      icon.classList.remove('fa-eye-slash');
-      icon.classList.add('fa-eye');
+    const revealed = input.type === 'password';
+    input.type = revealed ? 'text' : 'password';
+
+    // The reveal button carries an SVG sprite, not a font icon: swapping the
+    // symbol is what changes the eye. The old code toggled FontAwesome classes
+    // on a querySelector('i') that returns null since the UI migration, so it
+    // threw on every click and the icon never changed.
+    const use = input.nextElementSibling?.querySelector('use');
+    if (use) {
+      use.setAttribute(
+        'href',
+        revealed ? '/icons.svg#i-eye-off' : '/icons.svg#i-eye'
+      );
     }
   }
 }
 
 // Tags Management
+/* The add button is addressed by id. It used to be found by walking up to a
+   `.space-y-2` ancestor — a Tailwind class that no view has carried since the
+   move to the zr system, so closest() returned null, addTagButton stayed
+   undefined and the guard below skipped initialize() entirely. That took the
+   whole field down with it: the Add button did nothing, Enter fell through to
+   the form and saved instead of adding a tag, and existing chips could not be
+   removed. Both the Tags and the Ignore Tags field were affected. */
 class TagsManager {
-  constructor(tagInputId, tagsContainerId, tagsHiddenInputId) {
+  constructor(
+    tagInputId,
+    tagsContainerId,
+    tagsHiddenInputId,
+    addButtonId = null
+  ) {
     this.tagInput = document.getElementById(tagInputId); //'tagInput'
     this.tagsContainer = document.getElementById(tagsContainerId); // tagsContainer
     this.tagsHiddenInput = document.getElementById(tagsHiddenInputId); // tagsHiddenInput
-    this.addTagButton = this.tagInput
-      ?.closest('.space-y-2')
-      ?.querySelector('button');
+    this.addTagButton = addButtonId
+      ? document.getElementById(addButtonId)
+      : null;
 
-    if (this.tagInput && this.tagsContainer && this.addTagButton) {
+    // The input and its chip list are what the field needs to work. A missing
+    // add button costs the button, not Enter and not chip removal.
+    if (this.tagInput && this.tagsContainer) {
       this.initialize();
 
       // Initialize existing tags with proper event handlers
@@ -363,7 +348,7 @@ class TagsManager {
   }
 
   initializeExistingTags() {
-    const existingTags = this.tagsContainer.querySelectorAll('.bg-blue-100');
+    const existingTags = this.tagsContainer.querySelectorAll('.zr-chip');
     existingTags.forEach((tagElement) => {
       const removeButton = tagElement.querySelector('button');
       if (removeButton) {
@@ -374,7 +359,7 @@ class TagsManager {
 
   initializeTagRemoval(button) {
     button.addEventListener('click', async () => {
-      const result = await Swal.fire({
+      const result = await zrDialog({
         title: 'Remove Tag',
         text: 'Are you sure you want to remove this tag?',
         icon: 'question',
@@ -389,7 +374,7 @@ class TagsManager {
       });
 
       if (result.isConfirmed) {
-        const tagElement = button.closest('.bg-blue-100');
+        const tagElement = button.closest('.zr-chip');
         if (tagElement) {
           tagElement.remove();
           this.updateHiddenInput();
@@ -405,7 +390,7 @@ class TagsManager {
     const specialChars = /[,;:\n\r\\/]/;
 
     if (specialChars.test(tagText)) {
-      await Swal.fire({
+      await zrDialog({
         title: 'Invalid Characters',
         text: 'Tags cannot contain commas, semi-colons, colons, or line breaks.',
         icon: 'warning',
@@ -428,16 +413,18 @@ class TagsManager {
 
   createTagElement(text) {
     const tag = document.createElement('div');
-    tag.className =
-      'bg-blue-100 text-blue-800 px-3 py-1 rounded-full flex items-center gap-2 animate-fade-in';
+    tag.className = 'zr-chip';
 
     const tagText = document.createElement('span');
     tagText.textContent = text;
 
     const removeButton = document.createElement('button');
     removeButton.type = 'button';
-    removeButton.className = 'hover:text-blue-600';
-    removeButton.innerHTML = '<i class="fas fa-times"></i>';
+    // Matches the server-rendered chips in settings.ejs; an added chip used to
+    // get an unstyled remove button next to styled ones.
+    removeButton.className = 'zr-link';
+    removeButton.innerHTML =
+      '<svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-x"/></svg>';
 
     this.initializeTagRemoval(removeButton);
 
@@ -451,7 +438,7 @@ class TagsManager {
     if (!this.tagsHiddenInput || !this.tagsContainer) return;
 
     const tags = Array.from(
-      this.tagsContainer.querySelectorAll('.bg-blue-100 span')
+      this.tagsContainer.querySelectorAll('.zr-chip span')
     )
       .map((span) => span.textContent.trim())
       .filter((tag) => tag); // Remove any empty tags
@@ -519,10 +506,14 @@ For the language:
 }
 
 function initializeCoreSettings() {
-  new SettingsTabsManager();
   new FormManager();
-  new TagsManager('tagInput', 'tagsContainer', 'tags');
-  new TagsManager('ignoreTagInput', 'ignoreTagsContainer', 'ignoreTags');
+  new TagsManager('tagInput', 'tagsContainer', 'tags', 'tagAddButton');
+  new TagsManager(
+    'ignoreTagInput',
+    'ignoreTagsContainer',
+    'ignoreTags',
+    'ignoreTagAddButton'
+  );
   new TagsManager('promptTagInput', 'promptTagsContainer', 'promptTags');
   new PromptManager();
 }
@@ -532,6 +523,15 @@ function initializeFormHandlers() {
   const aiProviderPresets = Array.isArray(settingsBootstrap.aiProviderPresets)
     ? settingsBootstrap.aiProviderPresets
     : [];
+  // Claude models and defaults as services/anthropicSupport.js defines them.
+  const anthropicOptions = settingsBootstrap.anthropic || {};
+  const anthropicSuggestedModelIds = (
+    Array.isArray(anthropicOptions.suggestedModels)
+      ? anthropicOptions.suggestedModels
+      : []
+  )
+    .map((entry) => String(entry?.id || '').trim())
+    .filter(Boolean);
 
   const aiPresetSelect = document.getElementById('aiPreset');
   const aiPresetHint = document.getElementById('aiPresetHint');
@@ -551,6 +551,12 @@ function initializeFormHandlers() {
   const fetchAiModelsBtn = document.getElementById('fetchAiModelsBtn');
   const fetchCustomAiModelsBtn = document.getElementById(
     'fetchCustomAiModelsBtn'
+  );
+  const anthropicApiKeyInput = document.getElementById('anthropicApiKey');
+  const anthropicModelInput = document.getElementById('anthropicModel');
+  const anthropicApiUrlInput = document.getElementById('anthropicApiUrl');
+  const fetchAnthropicModelsBtn = document.getElementById(
+    'fetchAnthropicModelsBtn'
   );
   const fetchOpenrouterAiModelsBtn = document.getElementById(
     'fetchOpenrouterAiModelsBtn'
@@ -582,7 +588,7 @@ function initializeFormHandlers() {
         button.dataset.originalHtml = button.innerHTML;
       }
       button.disabled = true;
-      button.innerHTML = `<i class="fas fa-spinner fa-spin"></i><span>${loadingText}</span>`;
+      button.innerHTML = `<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg><span>${loadingText}</span>`;
       return;
     }
 
@@ -592,10 +598,17 @@ function initializeFormHandlers() {
     }
   };
 
+  /* `grouping` is optional and only used by the OCR dropdown: it splits the
+     list into a recommended group and the rest, preselecting the first
+     recommended entry. Without it the select renders flat, exactly as before.
+     The recommendation is a hint, never a filter — vision support is detected
+     from model names, and a name says nothing certain about what a model can
+     read. */
   const populateModelSelect = (
     selectElement,
     models,
-    placeholder = 'Select model'
+    placeholder = 'Select model',
+    grouping = null
   ) => {
     if (!selectElement) return;
     selectElement.innerHTML = '';
@@ -605,22 +618,53 @@ function initializeFormHandlers() {
     emptyOption.textContent = placeholder;
     selectElement.appendChild(emptyOption);
 
-    const uniqueModels = Array.from(
-      new Set(
-        (Array.isArray(models) ? models : [])
-          .map((model) => String(model || '').trim())
-          .filter(Boolean)
-      )
-    );
+    const normalizeList = (list) =>
+      Array.from(
+        new Set(
+          (Array.isArray(list) ? list : [])
+            .map((model) => String(model || '').trim())
+            .filter(Boolean)
+        )
+      );
 
-    uniqueModels.forEach((model) => {
+    const uniqueModels = normalizeList(models);
+    const appendOption = (parent, model) => {
       const option = document.createElement('option');
       option.value = model;
       option.textContent = model;
-      selectElement.appendChild(option);
-    });
+      parent.appendChild(option);
+    };
 
-    selectElement.value = uniqueModels.length > 0 ? uniqueModels[0] : '';
+    const recommended = grouping
+      ? normalizeList(grouping.recommended).filter((model) =>
+          uniqueModels.includes(model)
+        )
+      : [];
+    const rest = uniqueModels.filter((model) => !recommended.includes(model));
+
+    if (recommended.length > 0 && rest.length > 0) {
+      const recommendedGroup = document.createElement('optgroup');
+      recommendedGroup.label = grouping.recommendedLabel || 'Recommended';
+      recommended.forEach((model) => appendOption(recommendedGroup, model));
+      selectElement.appendChild(recommendedGroup);
+
+      const restGroup = document.createElement('optgroup');
+      restGroup.label = grouping.otherLabel || 'Other models';
+      rest.forEach((model) => appendOption(restGroup, model));
+      selectElement.appendChild(restGroup);
+    } else {
+      uniqueModels.forEach((model) => appendOption(selectElement, model));
+    }
+
+    const preferred = String(grouping?.preferred || '').trim();
+    if (preferred && uniqueModels.includes(preferred)) {
+      selectElement.value = preferred;
+      return;
+    }
+
+    const firstRecommended = recommended.length > 0 ? recommended[0] : null;
+    selectElement.value =
+      firstRecommended || (uniqueModels.length > 0 ? uniqueModels[0] : '');
   };
 
   const fetchModels = async (url, payload) => {
@@ -678,6 +722,17 @@ function initializeFormHandlers() {
         ).trim(),
       };
     }
+    if (provider === 'anthropic') {
+      // An empty URL is api.anthropic.com, which is what the preset says.
+      return {
+        provider,
+        apiUrl: String(anthropicApiUrlInput?.value || '')
+          .trim()
+          .replace(/\/+$/, ''),
+        model: String(anthropicModelInput?.value || '').trim(),
+      };
+    }
+
     if (provider === 'openrouter') {
       return {
         provider,
@@ -770,6 +825,27 @@ function initializeFormHandlers() {
         azureEndpoint.value = String(preset.apiUrl || '').trim();
       if (azureDeploymentName)
         azureDeploymentName.value = String(preset.model || '').trim();
+    } else if (provider === 'anthropic') {
+      if (anthropicApiUrlInput)
+        anthropicApiUrlInput.value = String(preset.apiUrl || '').trim();
+      if (anthropicModelInput) {
+        const presetModel =
+          String(preset.model || '').trim() ||
+          String(anthropicOptions.defaultModel || '');
+        populateModelSelect(
+          anthropicModelInput,
+          [...anthropicSuggestedModelIds, presetModel],
+          'Select Claude model',
+          { preferred: presetModel }
+        );
+      }
+      if (
+        anthropicApiKeyInput &&
+        preset.tokenPlaceholder &&
+        anthropicApiKeyInput.placeholder !== 'Configured'
+      ) {
+        anthropicApiKeyInput.placeholder = preset.tokenPlaceholder;
+      }
     } else if (provider === 'openrouter') {
       if (openrouterModelInput)
         openrouterModelInput.value = String(preset.model || '').trim();
@@ -844,6 +920,8 @@ function initializeFormHandlers() {
     document.getElementById('openaiModel'),
     document.getElementById('azureEndpoint'),
     document.getElementById('azureDeploymentName'),
+    anthropicModelInput,
+    anthropicApiUrlInput,
   ].forEach((element) => {
     if (element) {
       element.addEventListener('change', () => refreshAiPresetSelection());
@@ -895,7 +973,7 @@ function initializeFormHandlers() {
       const apiUrl = String(ollamaUrlInput?.value || '').trim();
 
       if (provider !== 'ollama') {
-        await Swal.fire({
+        await zrDialog({
           icon: 'info',
           title: 'Switch provider',
           text: 'Use this button with AI Provider set to Ollama.',
@@ -904,7 +982,7 @@ function initializeFormHandlers() {
       }
 
       if (!apiUrl) {
-        await Swal.fire({
+        await zrDialog({
           icon: 'warning',
           title: 'Missing URL',
           text: 'Please enter the Ollama API URL first.',
@@ -929,7 +1007,7 @@ function initializeFormHandlers() {
         const resolvedInfo = result.resolvedApiUrl
           ? `\nResolved API URL: ${result.resolvedApiUrl}`
           : '';
-        await Swal.fire({
+        await zrDialog({
           icon: 'success',
           title: 'Models loaded',
           text: `${models.length > 0 ? `Found ${models.length} model(s).` : 'No models found.'}${resolvedInfo}`,
@@ -941,7 +1019,7 @@ function initializeFormHandlers() {
           error,
           null
         );
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: errorDetails.isTimeout
             ? 'AI timeout reached'
@@ -963,7 +1041,7 @@ function initializeFormHandlers() {
       const token = String(customApiKeyInput?.value || '').trim();
 
       if (provider !== 'custom') {
-        await Swal.fire({
+        await zrDialog({
           icon: 'info',
           title: 'Switch provider',
           text: 'Use this button with AI Provider set to Custom.',
@@ -972,7 +1050,7 @@ function initializeFormHandlers() {
       }
 
       if (!apiUrl) {
-        await Swal.fire({
+        await zrDialog({
           icon: 'warning',
           title: 'Missing URL',
           text: 'Please enter the custom base URL first.',
@@ -997,7 +1075,7 @@ function initializeFormHandlers() {
         const resolvedInfo = result.resolvedApiUrl
           ? `\nResolved API URL: ${result.resolvedApiUrl}`
           : '';
-        await Swal.fire({
+        await zrDialog({
           icon: 'success',
           title: 'Models loaded',
           text: `${models.length > 0 ? `Found ${models.length} model(s).` : 'No models found.'}${resolvedInfo}`,
@@ -1009,7 +1087,7 @@ function initializeFormHandlers() {
           error,
           null
         );
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: errorDetails.isTimeout
             ? 'AI timeout reached'
@@ -1018,6 +1096,65 @@ function initializeFormHandlers() {
         });
       } finally {
         setButtonLoading(fetchCustomAiModelsBtn, false);
+      }
+    });
+  }
+
+  /* The live list needs a key; without one (or when the call fails) the route
+     answers with the suggested models and says so in its message. The list is
+     laid out like the OCR model select, and the model chosen before stays
+     selected and listed even when the answer does not name it. */
+  const fillAnthropicModelSelect = (models) => {
+    const current = String(anthropicModelInput?.value || '').trim();
+    const preferred = current || String(anthropicOptions.defaultModel || '');
+    populateModelSelect(
+      anthropicModelInput,
+      [...models, preferred],
+      'Select Claude model',
+      { preferred }
+    );
+  };
+
+  if (fetchAnthropicModelsBtn) {
+    fetchAnthropicModelsBtn.addEventListener('click', async () => {
+      setButtonLoading(fetchAnthropicModelsBtn, true);
+      try {
+        const response = await fetch('/api/settings/ai/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            aiProvider: 'anthropic',
+            apiUrl: String(anthropicApiUrlInput?.value || '').trim(),
+            // Empty means the stored key; the route resolves it.
+            token: String(anthropicApiKeyInput?.value || '').trim(),
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+          throw new Error(
+            result.error || result.message || 'Model discovery failed'
+          );
+        }
+
+        const models = Array.isArray(result.models) ? result.models : [];
+        fillAnthropicModelSelect(
+          models.length > 0 ? models : anthropicSuggestedModelIds
+        );
+        await zrDialog({
+          icon: result.live === false ? 'warning' : 'success',
+          title:
+            result.live === false ? 'Suggested models shown' : 'Models loaded',
+          text: result.message || `Found ${models.length} model(s).`,
+        });
+      } catch (error) {
+        fillAnthropicModelSelect(anthropicSuggestedModelIds);
+        await zrDialog({
+          icon: 'error',
+          title: 'Loading failed',
+          text: String(error?.message || error),
+        });
+      } finally {
+        setButtonLoading(fetchAnthropicModelsBtn, false);
       }
     });
   }
@@ -1031,7 +1168,7 @@ function initializeFormHandlers() {
       const token = String(openrouterKeyInput?.value || '').trim();
 
       if (provider !== 'openrouter') {
-        await Swal.fire({
+        await zrDialog({
           icon: 'info',
           title: 'Switch provider',
           text: 'Use this button with AI Provider set to OpenRouter.',
@@ -1055,7 +1192,7 @@ function initializeFormHandlers() {
           models,
           'Select OpenRouter model'
         );
-        await Swal.fire({
+        await zrDialog({
           icon: 'success',
           title: 'Models loaded',
           text:
@@ -1070,7 +1207,7 @@ function initializeFormHandlers() {
           error,
           null
         );
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: errorDetails.isTimeout
             ? 'AI timeout reached'
@@ -1082,6 +1219,24 @@ function initializeFormHandlers() {
       }
     });
   }
+
+  /* What Claude OCR falls back to when its own fields are empty: the
+     Anthropic AI provider's key, URL and model — but only while that provider
+     is selected, because the save route stores them only then. */
+  const getAnthropicFallbackForOcr = () => {
+    if (
+      String(aiProviderSelect?.value || '')
+        .trim()
+        .toLowerCase() !== 'anthropic'
+    ) {
+      return {};
+    }
+    return {
+      anthropicApiKey: String(anthropicApiKeyInput?.value || '').trim(),
+      anthropicApiUrl: String(anthropicApiUrlInput?.value || '').trim(),
+      anthropicModel: String(anthropicModelInput?.value || '').trim(),
+    };
+  };
 
   const setOcrTestPill = (state, text) => {
     if (!ocrTestState) return;
@@ -1098,11 +1253,13 @@ function initializeFormHandlers() {
 
   const normalizeOcrProviderForApi = (provider) => {
     const normalized = String(provider || 'mistral').toLowerCase();
-    return normalized === 'custom' || normalized === 'openrouter'
+    return ['custom', 'openrouter', 'anthropic'].includes(normalized)
       ? normalized
       : 'mistral';
   };
 
+  // Mistral has no URL field. For Claude the field is an optional proxy URL,
+  // so whatever is in it was typed for Claude (switching to Claude empties it).
   const normalizeOcrApiUrlForProvider = (provider, rawUrl) => {
     const normalizedProvider = normalizeOcrProviderForApi(provider);
     if (normalizedProvider === 'mistral') {
@@ -1110,6 +1267,27 @@ function initializeFormHandlers() {
     }
 
     return String(rawUrl || '').trim();
+  };
+
+  const isClaudeModelName = (model) => /^claude-/i.test(String(model || ''));
+
+  /* The OCR model select for Claude: the suggested models, with the current
+     choice kept when it is a Claude model and the AI provider's model (or the
+     default) preselected otherwise. */
+  const offerAnthropicOcrModels = () => {
+    if (!ocrModelInput) return;
+    const current = String(ocrModelInput.value || '').trim();
+    const aiModel = getAnthropicFallbackForOcr().anthropicModel || '';
+    const preferred = isClaudeModelName(current)
+      ? current
+      : (isClaudeModelName(aiModel) && aiModel) ||
+        String(anthropicOptions.defaultModel || '');
+    populateModelSelect(
+      ocrModelInput,
+      [...anthropicSuggestedModelIds, preferred],
+      'Select Claude model',
+      { preferred }
+    );
   };
 
   const getOcrValidationTimeoutMs = () => {
@@ -1122,6 +1300,13 @@ function initializeFormHandlers() {
       : 30;
     return normalizedSeconds * 1000;
   };
+
+  // The provider the OCR fields were last laid out for, so a switch to
+  // Claude can be told apart from a re-render (the quickstart sets the select
+  // without a change event and then calls toggleOcrFields()).
+  let previousOcrProvider = String(
+    ocrProviderSelect?.value || 'mistral'
+  ).toLowerCase();
 
   const toggleOcrFields = () => {
     if (!ocrEnabledSelect || !ocrProviderSelect) return;
@@ -1140,12 +1325,43 @@ function initializeFormHandlers() {
     if (ocrApiUrlContainer) {
       ocrApiUrlContainer.classList.toggle(
         'hidden',
-        !enabled || (provider !== 'custom' && provider !== 'openrouter')
+        !enabled || !['custom', 'openrouter', 'anthropic'].includes(provider)
       );
     }
 
-    // PDF page rendering only applies to local vision models; the Mistral
-    // provider handles PDFs natively.
+    // Claude OCR: the key is optional (the AI provider's key is the
+    // fallback) and the URL is only for a proxy. Placeholders and hints for
+    // both cases are rendered by the server, which knows what is stored.
+    const isAnthropicOcr = provider === 'anthropic';
+    [ocrApiKeyInput, ocrApiUrlInput].forEach((input) => {
+      if (!input) return;
+      const placeholder = isAnthropicOcr
+        ? input.dataset.placeholderAnthropic
+        : input.dataset.placeholderDefault;
+      if (placeholder) input.placeholder = placeholder;
+    });
+    document
+      .getElementById('ocrApiKeyHint')
+      ?.classList.toggle('hidden', isAnthropicOcr);
+    document
+      .getElementById('ocrApiKeyAnthropicHint')
+      ?.classList.toggle('hidden', !isAnthropicOcr);
+    document
+      .getElementById('ocrApiUrlAnthropicHint')
+      ?.classList.toggle('hidden', !isAnthropicOcr);
+
+    // The recommended/other grouping in the model dropdown only exists on the
+    // classification path, which the Mistral provider does not take.
+    const ocrModelVisionHint = document.getElementById('ocrModelVisionHint');
+    if (ocrModelVisionHint) {
+      ocrModelVisionHint.classList.toggle(
+        'hidden',
+        !enabled || provider !== 'custom'
+      );
+    }
+
+    // PDF page rendering only applies to local vision models; Mistral and
+    // Claude read PDFs natively.
     const ocrPdfRenderContainer = document.getElementById(
       'ocrPdfRenderContainer'
     );
@@ -1179,6 +1395,8 @@ function initializeFormHandlers() {
     if (testOcrBtn) {
       testOcrBtn.disabled = !enabled;
     }
+
+    previousOcrProvider = provider;
   };
 
   if (ocrProviderSelect) {
@@ -1188,8 +1406,29 @@ function initializeFormHandlers() {
     if (initialProvider === 'ollama') {
       ocrProviderSelect.value = 'custom';
     }
+    if (initialProvider === 'anthropic') {
+      offerAnthropicOcrModels();
+    }
 
     ocrProviderSelect.addEventListener('change', () => {
+      const provider = String(
+        ocrProviderSelect.value || 'mistral'
+      ).toLowerCase();
+      if (provider === 'anthropic' && previousOcrProvider !== 'anthropic') {
+        // A URL left from another provider (an auto-detected Ollama URL,
+        // say) would be used as a Claude proxy.
+        if (ocrApiUrlInput) ocrApiUrlInput.value = '';
+        offerAnthropicOcrModels();
+      } else if (
+        provider === 'mistral' &&
+        isClaudeModelName(ocrModelInput?.value)
+      ) {
+        populateModelSelect(
+          ocrModelInput,
+          ['mistral-ocr-latest'],
+          'Select OCR model'
+        );
+      }
       toggleOcrFields();
       setOcrTestPill('default', 'Not tested');
     });
@@ -1244,6 +1483,22 @@ function initializeFormHandlers() {
     });
   }
 
+  // Schedule and batch size only matter while automatic processing is ON.
+  const ocrAutoProcessValueInput = document.getElementById(
+    'ocrAutoProcessEnabled'
+  );
+  const ocrAutoProcessOptionsContainer = document.getElementById(
+    'ocrAutoProcessOptionsContainer'
+  );
+  if (ocrAutoProcessValueInput && ocrAutoProcessOptionsContainer) {
+    ocrAutoProcessValueInput.addEventListener('change', () => {
+      ocrAutoProcessOptionsContainer.classList.toggle(
+        'hidden',
+        ocrAutoProcessValueInput.value !== 'yes'
+      );
+    });
+  }
+
   const quickstartUrlInput = document.getElementById('settingsQuickstartUrl');
   const quickstartApiKeyInput = document.getElementById(
     'settingsQuickstartApiKey'
@@ -1279,7 +1534,7 @@ function initializeFormHandlers() {
     quickstartDetectBtn.addEventListener('click', async () => {
       const baseUrl = String(quickstartUrlInput?.value || '').trim();
       if (!baseUrl) {
-        await Swal.fire({
+        await zrDialog({
           icon: 'warning',
           title: 'URL required',
           text: 'Enter the base URL of your AI server first.',
@@ -1375,7 +1630,7 @@ function initializeFormHandlers() {
           error,
           null
         );
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: errorDetails.isTimeout
             ? 'Detection timeout reached'
@@ -1390,7 +1645,7 @@ function initializeFormHandlers() {
 
   const applyQuickstartDetectionToForm = async () => {
     if (!quickstartDetection) {
-      await Swal.fire({
+      await zrDialog({
         icon: 'warning',
         title: 'Detection required',
         text: 'Run detection first.',
@@ -1400,7 +1655,7 @@ function initializeFormHandlers() {
 
     const selectedAiModel = String(quickstartAiModelSelect?.value || '').trim();
     if (!selectedAiModel) {
-      await Swal.fire({
+      await zrDialog({
         icon: 'warning',
         title: 'No AI model selected',
         text: 'Choose an AI model before applying.',
@@ -1507,16 +1762,31 @@ function initializeFormHandlers() {
     }
 
     const iconPresets = {
-      pending: { className: 'fas fa-spinner fa-spin', color: '' },
-      success: { className: 'fas fa-circle-check', color: '#16a34a' },
-      error: { className: 'fas fa-circle-xmark', color: '#dc2626' },
-      skipped: { className: 'fas fa-circle-minus', color: '#94a3b8' },
+      pending: { symbol: 'i-refresh', spin: true, color: '' },
+      success: { symbol: 'i-check-circle', spin: false, color: 'var(--zr-ok)' },
+      error: {
+        symbol: 'i-alert-circle',
+        spin: false,
+        color: 'var(--zr-danger)',
+      },
+      skipped: {
+        symbol: 'i-minus',
+        spin: false,
+        color: 'var(--zr-text-faint)',
+      },
     };
     const preset = iconPresets[state] || iconPresets.pending;
 
     row.innerHTML = '';
-    const icon = document.createElement('i');
-    icon.className = preset.className;
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute(
+      'class',
+      `zr-icon zr-icon--sm${preset.spin ? ' zr-icon--spin' : ''}`
+    );
+    icon.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', `/icons.svg#${preset.symbol}`);
+    icon.appendChild(use);
     if (preset.color) {
       icon.style.color = preset.color;
     }
@@ -1654,7 +1924,7 @@ function initializeFormHandlers() {
           );
         }
 
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: 'Model test failed',
           text: `${failures.join('\n')}\n\nAdjust the model selection and try again.`,
@@ -1687,16 +1957,22 @@ function initializeFormHandlers() {
           ocrApiUrlInput?.value
         ),
         apiKey: String(ocrApiKeyInput?.value || '').trim(),
+        // Claude OCR picks the AI model when this is empty; the Mistral
+        // default would only be replaced again.
         model:
-          String(ocrModelInput?.value || '').trim() || 'mistral-ocr-latest',
+          String(ocrModelInput?.value || '').trim() ||
+          (ocrProviderSelect?.value === 'anthropic'
+            ? ''
+            : 'mistral-ocr-latest'),
         zdr: document.getElementById('ocrOpenRouterZdr')?.value === 'yes',
         setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
+        ...getAnthropicFallbackForOcr(),
       };
 
       const originalHtml = testOcrBtn.innerHTML;
       testOcrBtn.disabled = true;
       testOcrBtn.innerHTML =
-        '<i class="fas fa-spinner fa-spin"></i><span>Testing...</span>';
+        '<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg><span>Testing...</span>';
       setOcrTestPill('loading', 'Testing...');
 
       try {
@@ -1718,7 +1994,7 @@ function initializeFormHandlers() {
         }
 
         setOcrTestPill('success', 'Connection valid');
-        await Swal.fire({
+        await zrDialog({
           icon: 'success',
           title: 'OCR test successful',
           text: result.message || 'OCR provider is reachable.',
@@ -1733,7 +2009,7 @@ function initializeFormHandlers() {
           'error',
           errorDetails.isTimeout ? 'Timeout reached' : 'Test failed'
         );
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: errorDetails.isTimeout
             ? 'OCR timeout reached'
@@ -1756,16 +2032,13 @@ function initializeFormHandlers() {
         provider,
         ocrApiUrlInput?.value
       );
+      // Sent empty when the field is empty, which is the normal case: a saved
+      // key is never echoed back into a password field and one injected through
+      // the environment was never in the form to begin with. The route resolves
+      // it from OCR_API_KEY / MISTRAL_API_KEY, so only the server can tell
+      // whether a key exists — refusing here asked "did you just type one?"
+      // and reported the answer as "there is none".
       const apiKey = String(ocrApiKeyInput?.value || '').trim();
-
-      if (provider === 'mistral' && !apiKey) {
-        await Swal.fire({
-          icon: 'warning',
-          title: 'Missing API key',
-          text: 'Mistral OCR requires an API key to load models.',
-        });
-        return;
-      }
 
       setButtonLoading(fetchOcrModelsBtn, true);
       try {
@@ -1780,6 +2053,7 @@ function initializeFormHandlers() {
             apiKey,
             zdr: document.getElementById('ocrOpenRouterZdr')?.value === 'yes',
             setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
+            ...getAnthropicFallbackForOcr(),
           }),
         });
 
@@ -1794,15 +2068,34 @@ function initializeFormHandlers() {
           ocrApiUrlInput.value = String(result.resolvedApiUrl).trim();
         }
 
+        // A Claude model already chosen stays chosen; the route suggests the
+        // AI provider's model otherwise.
+        const currentOcrModel = String(ocrModelInput?.value || '').trim();
+        const preferredOcrModel =
+          provider === 'anthropic' && isClaudeModelName(currentOcrModel)
+            ? currentOcrModel
+            : result.suggestedModel;
+
         const models = Array.isArray(result.models) ? result.models : [];
-        populateModelSelect(ocrModelInput, models, 'Select OCR model');
-        await Swal.fire({
-          icon: 'success',
-          title: 'OCR models loaded',
-          text:
-            models.length > 0
-              ? `Found ${models.length} model(s).`
-              : 'No models found.',
+        const visionModels = Array.isArray(result.visionModels)
+          ? result.visionModels
+          : [];
+        // The list is offered whole; vision hits are grouped on top as a
+        // recommendation. Filtering on them hid models that read documents
+        // perfectly well but do not say "vision" in their name.
+        populateModelSelect(ocrModelInput, models, 'Select OCR model', {
+          recommended: visionModels,
+          recommendedLabel: 'Recommended (vision detected)',
+          otherLabel: 'Other models',
+          preferred: preferredOcrModel,
+        });
+        await zrDialog({
+          icon: result.live === false ? 'warning' : 'success',
+          title:
+            result.live === false
+              ? 'Suggested models shown'
+              : 'OCR models loaded',
+          text: models.length > 0 ? result.message : 'No models found.',
         });
       } catch (error) {
         const errorDetails = getTimeoutAwareErrorDetails(
@@ -1810,7 +2103,7 @@ function initializeFormHandlers() {
           error,
           getOcrValidationTimeoutMs()
         );
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: errorDetails.isTimeout
             ? 'OCR timeout reached'
@@ -1839,7 +2132,7 @@ function initializeFormHandlers() {
       const stored = sessionStorage.getItem('openrouterOauth');
       sessionStorage.removeItem('openrouterOauth');
       if (!stored) {
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: 'OpenRouter connection failed',
           text: 'The OAuth session expired. Please try connecting again.',
@@ -1896,13 +2189,13 @@ function initializeFormHandlers() {
           setOcrTestPill('default', 'Not tested');
         }
 
-        await Swal.fire({
+        await zrDialog({
           icon: 'success',
           title: 'OpenRouter connected',
           text: 'Key created — remember to save settings to persist it.',
         });
       } catch (error) {
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: 'OpenRouter connection failed',
           text: error.message || 'Could not exchange OpenRouter OAuth code.',
@@ -1951,7 +2244,7 @@ function initializeFormHandlers() {
         hostname === '::1';
       const isSecure = window.location.protocol === 'https:';
       if (!isLoopback && !isSecure) {
-        await Swal.fire({
+        await zrDialog({
           icon: 'warning',
           title: 'OpenRouter connect unavailable here',
           text: "OpenRouter's account-connect flow only works over HTTPS or from localhost, and this page is loaded over plain HTTP at a non-localhost address. Create an API key directly at openrouter.ai/keys and paste it above instead.",
@@ -2000,7 +2293,7 @@ function initializeFormHandlers() {
 
       if (!popup) {
         setButtonLoading(button, false);
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: 'Popup blocked',
           text: 'Allow popups for this page to connect your OpenRouter account.',
@@ -2231,7 +2524,7 @@ function initializeFormHandlers() {
         // Disable button and show loading state
         btn.disabled = true;
         btn.innerHTML =
-          '<i class="fas fa-spinner fa-spin"></i> Clearing Cache...';
+          '<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg> Clearing Cache...';
 
         const response = await fetch('/api/settings/clear-tag-cache', {
           method: 'POST',
@@ -2243,7 +2536,7 @@ function initializeFormHandlers() {
         const result = await response.json();
 
         if (result.success) {
-          await Swal.fire({
+          await zrDialog({
             icon: 'success',
             title: 'Cache Cleared!',
             text: result.message || 'Tag cache has been cleared successfully.',
@@ -2255,7 +2548,7 @@ function initializeFormHandlers() {
         }
       } catch (error) {
         console.error('Error clearing tag cache:', error);
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: 'Error',
           text: error.message || 'Failed to clear tag cache. Please try again.',
@@ -2282,7 +2575,7 @@ function initializeFormHandlers() {
   );
   if (clearThumbnailCacheBtn) {
     clearThumbnailCacheBtn.addEventListener('click', async () => {
-      const confirmResult = await Swal.fire({
+      const confirmResult = await zrDialog({
         icon: 'warning',
         title: 'Clear thumbnail cache?',
         text: 'This will delete all locally cached thumbnail previews. They will be downloaded again when needed.',
@@ -2301,7 +2594,7 @@ function initializeFormHandlers() {
       try {
         clearThumbnailCacheBtn.disabled = true;
         clearThumbnailCacheBtn.innerHTML =
-          '<i class="fas fa-spinner fa-spin"></i> Clearing...';
+          '<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg> Clearing...';
 
         const response = await fetch('/api/settings/thumbnail-cache/clear', {
           method: 'POST',
@@ -2317,14 +2610,14 @@ function initializeFormHandlers() {
 
         renderThumbnailCacheStats(result.remaining || {});
 
-        await Swal.fire({
+        await zrDialog({
           icon: 'success',
           title: 'Thumbnail cache cleared',
           text: result.message || `Removed ${result.removedFiles || 0} files.`,
         });
       } catch (error) {
         console.error('Error clearing thumbnail cache:', error);
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: 'Action failed',
           text: error.message || 'Failed to clear thumbnail cache.',
@@ -2344,7 +2637,7 @@ function initializeFormHandlers() {
   );
   if (resetLocalOverridesBtn) {
     resetLocalOverridesBtn.addEventListener('click', async () => {
-      const confirmResult = await Swal.fire({
+      const confirmResult = await zrDialog({
         icon: 'warning',
         title: 'Reset local runtime overrides?',
         text: 'This removes local overrides. Container-managed environment values are applied after restart.',
@@ -2378,7 +2671,7 @@ function initializeFormHandlers() {
       try {
         resetLocalOverridesBtn.disabled = true;
         resetLocalOverridesBtn.innerHTML =
-          '<i class="fas fa-spinner fa-spin"></i> Resetting...';
+          '<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg> Resetting...';
 
         const response = await fetch('/api/settings/reset-local-overrides', {
           method: 'POST',
@@ -2395,7 +2688,7 @@ function initializeFormHandlers() {
           );
         }
 
-        await Swal.fire({
+        await zrDialog({
           icon: 'success',
           title: 'Local overrides reset',
           text:
@@ -2406,7 +2699,7 @@ function initializeFormHandlers() {
         showRestartOverlay();
         await waitForServerRecovery();
       } catch (error) {
-        await Swal.fire({
+        await zrDialog({
           icon: 'error',
           title: 'Reset failed',
           text: error.message,
@@ -2427,11 +2720,12 @@ function initializeFormHandlers() {
       const originalHtml = btn.innerHTML;
 
       btn.disabled = true;
-      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running...';
+      btn.innerHTML =
+        '<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg> Running...';
       if (resultDiv) {
         resultDiv.className = 'mt-3';
         resultDiv.innerHTML =
-          '<span class="text-sm text-gray-500"><i class="fas fa-spinner fa-spin mr-1"></i> Reconciliation in progress...</span>';
+          '<span class="zr-sm zr-faint"><svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg> Reconciliation in progress...</span>';
       }
 
       try {
@@ -2482,12 +2776,12 @@ function initializeFormHandlers() {
           if (resultDiv) {
             if (lastEvent.skipped) {
               resultDiv.innerHTML =
-                '<span class="text-sm text-yellow-600"><i class="fas fa-exclamation-triangle mr-1"></i> Skipped: a scan or reconciliation is already in progress.</span>';
+                '<span class="zr-sm zr-warn-text"><svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-alert"/></svg> Skipped: a scan or reconciliation is already in progress.</span>';
             } else if (lastEvent.removed > 0) {
-              resultDiv.innerHTML = `<span class="text-sm text-green-600"><i class="fas fa-check-circle mr-1"></i> Removed ${lastEvent.removed} stale entr${lastEvent.removed === 1 ? 'y' : 'ies'} in ${lastEvent.durationMs}ms.</span>`;
+              resultDiv.innerHTML = `<span class="zr-sm zr-ok-text"><svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-check-circle"/></svg> Removed ${lastEvent.removed} stale entr${lastEvent.removed === 1 ? 'y' : 'ies'} in ${lastEvent.durationMs}ms.</span>`;
             } else {
               resultDiv.innerHTML =
-                '<span class="text-sm text-green-600"><i class="fas fa-check-circle mr-1"></i> No stale entries found.</span>';
+                '<span class="zr-sm zr-ok-text"><svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-check-circle"/></svg> No stale entries found.</span>';
             }
           }
         } else if (lastEvent && lastEvent.type === 'error') {
@@ -2496,7 +2790,7 @@ function initializeFormHandlers() {
       } catch (error) {
         console.error('Error during reconciliation:', error);
         if (resultDiv) {
-          resultDiv.innerHTML = `<span class="text-sm text-red-600"><i class="fas fa-times-circle mr-1"></i> ${error.message || 'Reconciliation failed.'}</span>`;
+          resultDiv.innerHTML = `<span class="zr-sm zr-danger-text"><svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-x"/></svg> ${error.message || 'Reconciliation failed.'}</span>`;
         }
       } finally {
         btn.disabled = false;
@@ -2516,7 +2810,8 @@ function initializeFormHandlers() {
     const submitBtn = setupForm.querySelector('button[type="submit"]');
     const originalBtnText = submitBtn.innerHTML;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    submitBtn.innerHTML =
+      '<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg> Saving...';
 
     try {
       const formData = new FormData(setupForm);
@@ -2644,6 +2939,7 @@ function initializeFormHandlers() {
               .trim()
               .toLowerCase() === 'yes',
           setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
+          ...getAnthropicFallbackForOcr(),
         };
 
         const response = await fetch('/api/settings/ocr/models', {
@@ -2670,9 +2966,20 @@ function initializeFormHandlers() {
         }
 
         if (models.length > 0) {
-          formData.set('mistralOcrModel', models[0]);
+          // The discovery list is no longer vision-filtered, so pick the
+          // suggested model (or the first vision hit) rather than whatever
+          // happens to sort first.
+          const visionModels = Array.isArray(result.visionModels)
+            ? result.visionModels
+            : [];
+          const suggested = String(result.suggestedModel || '').trim();
+          const autoModel =
+            (suggested && models.includes(suggested) && suggested) ||
+            visionModels.find((model) => models.includes(model)) ||
+            models[0];
+          formData.set('mistralOcrModel', autoModel);
           const input = document.getElementById('mistralOcrModel');
-          if (input) input.value = models[0];
+          if (input) input.value = autoModel;
         }
       }
 
@@ -2693,7 +3000,10 @@ function initializeFormHandlers() {
       const result = await response.json();
 
       if (result.success) {
-        await Swal.fire({
+        // The saved values are the new baseline for the unsaved-change count
+        // and the leave warning (modules/settings-form.js).
+        setupForm.dispatchEvent(new CustomEvent('zr:settings-saved'));
+        await zrDialog({
           icon: 'success',
           title: 'Success!',
           text: result.message,
@@ -2711,11 +3021,18 @@ function initializeFormHandlers() {
         throw new Error(result.error || 'An unknown error occurred');
       }
     } catch (error) {
-      await Swal.fire({
+      await zrDialog({
         icon: 'error',
         title: 'Error',
         text: error.message,
       });
+      // Only one settings topic is visible at a time; this opens the one
+      // holding the field the message names (modules/settings-nav.js).
+      document.dispatchEvent(
+        new CustomEvent('zr:settings-save-error', {
+          detail: { message: String(error.message || '') },
+        })
+      );
     } finally {
       submitBtn.disabled = false;
       submitBtn.innerHTML = originalBtnText;
@@ -2827,7 +3144,7 @@ class URLValidator {
       }
     } catch (error) {
       this.isShowingError = true;
-      const result = await Swal.fire({
+      const result = await zrDialog({
         icon: 'warning',
         title: 'Invalid URL',
         text: error.message,
@@ -2852,7 +3169,7 @@ class URLValidator {
       const url = new URL(this.urlInput.value);
       this.urlInput.value = `${url.protocol}//${url.hostname}${url.port ? ':' + url.port : ''}`;
     } catch {
-      Swal.fire({
+      zrDialog({
         icon: 'error',
         title: 'Invalid URL',
         text: 'Please enter a valid URL. ( http[s]://your-paperless-instance:8000 )',
@@ -2864,407 +3181,150 @@ class URLValidator {
   }
 }
 
-const TOOLTIP_CARD_STYLES =
-  'background:#ffffff;color:#111827;border:1px solid #d1d5db;border-radius:8px;';
-const REGISTERED_TOOLTIP_INSTANCES = [];
-let tooltipResizeListenerAttached = false;
+/**
+ * Field help dialogs.
+ *
+ * Two settings carry more explanation than fits under an input. They used to
+ * open a Tippy tooltip built from hardcoded light colours, which was unreadable
+ * in the dark theme, and the same machinery tried to fold all 63 field hints
+ * into `?` buttons — driven by `#setupForm p.text-xs.text-gray-500`, a selector
+ * that stopped matching anything once the markup moved to framework classes.
+ * With the hints readable inline, only these two long ones are left and they
+ * open a plain dialog.
+ */
+const FIELD_HELP = {
+  urlHelp: {
+    title: 'Paperless-ngx API URL',
+    html: `
+      <div class="zr-prose">
+        <p>The URL points at the Paperless-ngx host itself, without a path:
+          <code>http://your-host:8000</code>. The <code>/api</code> endpoint is
+          appended automatically.</p>
+        <p><strong>Requirements</strong></p>
+        <ul>
+          <li>Starts with <code>http://</code> or <code>https://</code></li>
+          <li>Host or IP, optionally a port</li>
+          <li>No additional path or query</li>
+        </ul>
+        <p><strong>Running in Docker</strong></p>
+        <ul>
+          <li><code>localhost</code> and <code>127.0.0.1</code> point at this
+            container, not at Paperless-ngx</li>
+          <li>Use the machine's address on the network, for example
+            <code>http://192.168.1.100:8000</code></li>
+          <li>Or the container name when both services share a network, for
+            example <code>http://paperless-ngx:8000</code></li>
+        </ul>
+      </div>`,
+  },
+  tagCacheTTLHelp: {
+    title: 'Tag cache lifetime',
+    html: `
+      <div class="zr-prose">
+        <p>How long the tag list from Paperless-ngx is reused before it is
+          fetched again. During batch processing this is the difference between
+          one request and one per document.</p>
+        <ul>
+          <li><strong>60–180 s</strong> — new tags show up quickly, more API
+            calls</li>
+          <li><strong>300 s</strong> — the default, balanced</li>
+          <li><strong>600–3600 s</strong> — fewest API calls, new tags take
+            longer to appear</li>
+        </ul>
+      </div>`,
+  },
+};
 
-function getSettingsTooltipPlacement() {
-  return window.innerWidth < 768 ? 'bottom' : 'right';
-}
-
-function createReadableTooltipContent(innerHtml, padding = '10px 12px') {
-  return `<div style="${TOOLTIP_CARD_STYLES}padding:${padding};line-height:1.45;">${innerHtml}</div>`;
-}
-
-function getReadableTooltipOptions(overrides = {}) {
-  return {
-    allowHTML: true,
-    placement: getSettingsTooltipPlacement(),
-    interactive: true,
-    trigger: 'mouseenter focus click',
-    theme: 'light-border',
-    touch: 'hold',
-    appendTo: () => document.body,
-    ...overrides,
-  };
-}
-
-function normalizeTooltipInstances(instances) {
-  if (!instances) {
-    return [];
-  }
-
-  if (Array.isArray(instances)) {
-    return instances.filter(
-      (instance) => instance && typeof instance.setProps === 'function'
-    );
-  }
-
-  return typeof instances.setProps === 'function' ? [instances] : [];
-}
-
-function refreshAllTooltipPlacements() {
-  const placement = getSettingsTooltipPlacement();
-  REGISTERED_TOOLTIP_INSTANCES.forEach((instance) => {
-    instance.setProps({ placement });
-  });
-}
-
-function registerTooltipInstances(instances) {
-  const normalizedInstances = normalizeTooltipInstances(instances);
-  if (normalizedInstances.length === 0) {
-    return;
-  }
-
-  normalizedInstances.forEach((instance) => {
-    if (!REGISTERED_TOOLTIP_INSTANCES.includes(instance)) {
-      REGISTERED_TOOLTIP_INSTANCES.push(instance);
-    }
-  });
-
-  if (!tooltipResizeListenerAttached) {
-    window.addEventListener('resize', refreshAllTooltipPlacements);
-    tooltipResizeListenerAttached = true;
-  }
-}
-
-// Tooltip System
-class TooltipManager {
-  constructor() {
-    this.initialize();
-  }
-
-  initialize() {
-    this.tooltipInstance = tippy(
-      '#urlHelp',
-      getReadableTooltipOptions({
-        content: this.getTooltipContent(),
-        maxWidth: 450,
-        trigger: 'mouseenter click',
-        zIndex: 40,
-      })
-    );
-    registerTooltipInstances(this.tooltipInstance);
-  }
-
-  getTooltipContent() {
-    return createReadableTooltipContent(
-      `
-                <h3 style="font-size:16px;font-weight:700;margin-bottom:8px;">API URL Configuration</h3>
-                
-                <div style="margin-bottom:10px;">
-                    <p>The URL should follow this format:</p>
-                    <code style="display:block;padding:8px;background:#f3f4f6;border-radius:6px;color:#111827;">
-                        http://your-host:8000
-                    </code>
-                </div>
-                
-                <div style="margin-bottom:10px;">
-                    <p style="font-weight:600;">Important Notes:</p>
-                    <ul style="padding-left:18px;margin-top:4px;">
-                        <li>Must start with <u>http://</u> or <u>https://</u></li>
-                        <li>Contains <strong>host/IP</strong> and optionally a <strong>port</strong></li>
-                        <li>No additional paths or parameters</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:10px;">
-                    <p style="font-weight:600;">Docker Network Configuration:</p>
-                    <ul style="padding-left:18px;margin-top:4px;">
-                        <li>Using <strong>localhost</strong> or <strong>127.0.0.1</strong> won't work in Docker bridge mode</li>
-                        <li>Use your machine's local IP (e.g., <code>192.168.1.x</code>) instead</li>
-                        <li>Or use the Docker container name if both services are in the same network</li>
-                    </ul>
-                </div>
-
-                <div style="margin-bottom:10px;">
-                    <p style="font-weight:600;">Examples:</p>
-                    <ul style="list-style:none;padding-left:0;margin-top:4px;">
-                        <li>🔸 Local IP: <code>http://192.168.1.100:8000</code></li>
-                        <li>🔸 Container: <code>http://paperless-ngx:8000</code></li>
-                        <li>🔸 Remote: <code>http://paperless.domain.com</code></li>
-                    </ul>
-                </div>
-
-                <p style="font-size:12px;font-style:italic;margin-top:8px;">The /api endpoint will be added automatically.</p>
-        `,
-      '12px'
-    );
-  }
-}
-
-class SettingsHintManager {
-  getHintTriggerClasses() {
-    return [
-      'inline-flex',
-      'items-center',
-      'justify-center',
-      'ml-2',
-      'text-blue-700',
-      'hover:text-blue-900',
-      'focus:outline-none',
-      'focus:ring-2',
-      'focus:ring-blue-600',
-      'rounded-full',
-      'transition-colors',
-    ];
-  }
-
-  constructor() {
-    this.initializeTagCacheHint();
-    this.refresh();
-  }
-
-  getHintRows() {
-    return Array.from(
-      document.querySelectorAll('#setupForm p.text-xs.text-gray-500')
-    );
-  }
-
-  findAssociatedLabel(hint) {
-    const container = hint.closest('.space-y-2') || hint.parentElement;
-    if (!container) {
-      return null;
+function initializeFieldHelp() {
+  Object.entries(FIELD_HELP).forEach(([id, help]) => {
+    const button = document.getElementById(id);
+    if (!button) {
+      return;
     }
 
-    const directLabels = Array.from(container.querySelectorAll('label'));
-    if (directLabels.length > 0) {
-      return directLabels[0];
-    }
-
-    let sibling = hint.previousElementSibling;
-    while (sibling) {
-      if (sibling.matches && sibling.matches('label')) {
-        return sibling;
-      }
-
-      if (sibling.querySelector) {
-        const nestedLabel = sibling.querySelector('label');
-        if (nestedLabel) {
-          return nestedLabel;
-        }
-      }
-
-      sibling = sibling.previousElementSibling;
-    }
-
-    return null;
-  }
-
-  findFallbackAnchor(hint) {
-    const container = hint.closest('.space-y-2') || hint.parentElement;
-    if (!container) {
-      return null;
-    }
-
-    return (
-      container.querySelector('input, select, textarea, button') || container
-    );
-  }
-
-  ensureHintTriggers() {
-    const hintRows = this.getHintRows();
-    const tooltipTargets = [];
-
-    hintRows.forEach((hint) => {
-      const label = this.findAssociatedLabel(hint);
-
-      const fallbackAnchor = label ? null : this.findFallbackAnchor(hint);
-      if (!label && !fallbackAnchor) {
-        return;
-      }
-
-      if (label && label.querySelector('.setting-hint-trigger')) {
-        hint.classList.add('hidden');
-        return;
-      }
-
-      if (
-        !label &&
-        hint.parentElement?.querySelector(
-          '.setting-hint-trigger[data-hint-fallback="true"]'
-        )
-      ) {
-        hint.classList.add('hidden');
-        return;
-      }
-
-      const trigger = document.createElement('button');
-      trigger.type = 'button';
-      trigger.className = `setting-hint-trigger ${this.getHintTriggerClasses().join(' ')}`;
-      trigger.setAttribute('aria-label', 'Show setting hint');
-      trigger.style.width = '1.125rem';
-      trigger.style.height = '1.125rem';
-      trigger.style.minWidth = '1.125rem';
-      trigger.style.minHeight = '1.125rem';
-      trigger.innerHTML =
-        '<i class="fas fa-circle-question" style="font-size:0.875rem;line-height:1;"></i>';
-      trigger.dataset.hintContent = hint.innerHTML;
-      trigger.dataset.hintFallback = label ? 'false' : 'true';
-
-      if (label) {
-        if (!label.classList.contains('flex')) {
-          label.classList.add('flex', 'items-center');
-        }
-
-        label.appendChild(trigger);
-      } else if (
-        fallbackAnchor.matches &&
-        fallbackAnchor.matches('input, select, textarea, button')
-      ) {
-        fallbackAnchor.insertAdjacentElement('afterend', trigger);
-      } else {
-        fallbackAnchor.appendChild(trigger);
-      }
-
-      hint.classList.add('hidden');
-      tooltipTargets.push(trigger);
+    button.setAttribute('aria-label', `Help: ${help.title}`);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      zrDialog({
+        title: help.title,
+        html: help.html,
+        confirmButtonText: 'Close',
+      });
     });
-
-    return tooltipTargets;
-  }
-
-  bindHintTooltips(tooltipTargets) {
-    if (!Array.isArray(tooltipTargets) || tooltipTargets.length === 0) {
-      return;
-    }
-
-    const hintTooltipInstances = tippy(
-      tooltipTargets,
-      getReadableTooltipOptions({
-        maxWidth: 360,
-        content(reference) {
-          return createReadableTooltipContent(
-            reference.dataset.hintContent || '',
-            '8px 10px'
-          );
-        },
-      })
-    );
-    registerTooltipInstances(hintTooltipInstances);
-  }
-
-  refresh() {
-    const tooltipTargets = this.ensureHintTriggers();
-    this.bindHintTooltips(tooltipTargets);
-
-    const unboundTriggers = Array.from(
-      document.querySelectorAll('.setting-hint-trigger')
-    ).filter((trigger) => !trigger._tippy);
-    this.bindHintTooltips(unboundTriggers);
-  }
-
-  initialize() {
-    this.refresh();
-    this.initializeTagCacheHint();
-  }
-
-  initializeTagCacheHint() {
-    const tagCacheTTLHelp = document.getElementById('tagCacheTTLHelp');
-    if (!tagCacheTTLHelp) {
-      return;
-    }
-
-    const urlHelp = document.getElementById('urlHelp');
-    if (urlHelp) {
-      urlHelp.classList.remove('text-gray-400', 'hover:text-gray-600');
-      urlHelp.classList.add(...this.getHintTriggerClasses());
-      urlHelp.style.width = '1.125rem';
-      urlHelp.style.height = '1.125rem';
-      urlHelp.style.minWidth = '1.125rem';
-      urlHelp.style.minHeight = '1.125rem';
-
-      const urlHelpIcon = urlHelp.querySelector('i');
-      if (urlHelpIcon) {
-        urlHelpIcon.style.fontSize = '0.875rem';
-        urlHelpIcon.style.lineHeight = '1';
-      }
-    }
-
-    tagCacheTTLHelp.classList.remove('text-gray-400', 'hover:text-gray-600');
-    tagCacheTTLHelp.classList.add(...this.getHintTriggerClasses());
-    tagCacheTTLHelp.style.width = '1.125rem';
-    tagCacheTTLHelp.style.height = '1.125rem';
-    tagCacheTTLHelp.style.minWidth = '1.125rem';
-    tagCacheTTLHelp.style.minHeight = '1.125rem';
-
-    const tagCacheIcon = tagCacheTTLHelp.querySelector('i');
-    if (tagCacheIcon) {
-      tagCacheIcon.style.fontSize = '0.875rem';
-      tagCacheIcon.style.lineHeight = '1';
-    }
-
-    const tagCacheTooltipInstance = tippy(
-      tagCacheTTLHelp,
-      getReadableTooltipOptions({
-        maxWidth: 420,
-        content: createReadableTooltipContent(`
-                    <p style="margin-bottom:8px;">Controls how long tags are cached before refreshing from Paperless-ngx.</p>
-                    <ul style="padding-left:18px; margin:0 0 8px 0;">
-                        <li><strong>60-180s:</strong> fresher data, more API calls</li>
-                        <li><strong>300s (recommended):</strong> balanced</li>
-                        <li><strong>600-3600s:</strong> fewer API calls, slower visibility of new tags</li>
-                    </ul>
-                    <p style="font-size:12px;">Good cache settings can reduce Paperless tag API calls significantly during batch processing.</p>
-            `),
-      })
-    );
-    registerTooltipInstances(tagCacheTooltipInstance);
-  }
+  });
 }
 
 function initializeTooltipAndValidation() {
   new URLValidator();
-  new TooltipManager();
-  settingsHintManager = new SettingsHintManager();
-  initializeSettingsHintObserver();
-  scheduleSettingsHintsRefresh();
+  initializeFieldHelp();
 }
 
-let settingsHintManager = null;
-let settingsHintObserver = null;
-let settingsHintRefreshScheduled = false;
+/**
+ * Names each field's environment variable in its hint ("SCAN_INTERVAL ·
+ * Restart required") and on the field itself as data-env-key, unless the
+ * markup already names it. A switch carries the key on its hidden yes/no input
+ * and on the visible switch alike.
+ */
+function annotateEnvKeys(fieldMappings) {
+  fieldMappings.forEach(({ selector, envKey }) => {
+    const field = document.querySelector(selector);
+    if (!field) return;
+    field.dataset.envKey = envKey;
+    const visibleSwitch = field.id
+      ? document.querySelector(`[data-switch-target="${field.id}"]`)
+      : null;
+    if (visibleSwitch) visibleSwitch.dataset.envKey = envKey;
 
-function refreshSettingsHints() {
-  if (!settingsHintManager) {
-    return;
-  }
+    // A tile is a single checkbox with its label; the key goes in its tooltip.
+    const tile = field.closest('.zr-checktile');
+    if (tile) {
+      tile.title = envKey;
+      return;
+    }
+    const container = field.closest('.zr-field, .zr-switchrow');
+    if (!container) return;
+    const hints = [...container.querySelectorAll('.zr-field__hint')].filter(
+      (hint) => !hint.hasAttribute('data-anthropic-hint')
+    );
+    const keyElement = () => {
+      const code = document.createElement('code');
+      code.className = 'zr-envkey';
+      code.textContent = envKey;
+      return code;
+    };
 
-  settingsHintManager.refresh();
-}
-
-function scheduleSettingsHintsRefresh() {
-  if (settingsHintRefreshScheduled) {
-    return;
-  }
-
-  settingsHintRefreshScheduled = true;
-  requestAnimationFrame(() => {
-    settingsHintRefreshScheduled = false;
-    refreshSettingsHints();
-  });
-}
-
-function initializeSettingsHintObserver() {
-  if (settingsHintObserver) {
-    return;
-  }
-
-  const setupForm = document.getElementById('setupForm');
-  if (!setupForm) {
-    return;
-  }
-
-  settingsHintObserver = new MutationObserver(() => {
-    scheduleSettingsHintsRefresh();
-  });
-
-  settingsHintObserver.observe(setupForm, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class', 'style', 'hidden'],
+    // A hint that names the key in its markup already gets it set like the
+    // added ones, instead of a second copy.
+    const naming = hints.filter((hint) => hint.textContent.includes(envKey));
+    if (naming.length) {
+      naming.forEach((hint) => {
+        if (hint.querySelector('.zr-envkey')) return;
+        const node = [...hint.childNodes].find(
+          (child) =>
+            child.nodeType === Node.TEXT_NODE &&
+            child.textContent.includes(envKey)
+        );
+        if (!node) return;
+        const at = node.textContent.indexOf(envKey);
+        const rest = node.splitText(at);
+        rest.textContent = rest.textContent.slice(envKey.length);
+        hint.insertBefore(keyElement(), rest);
+      });
+      return;
+    }
+    if (!hints.length) {
+      const hint = document.createElement('p');
+      hint.className = 'zr-field__hint';
+      hint.append(keyElement());
+      container.append(hint);
+      return;
+    }
+    // Hints that swap with the provider (the OCR key) each name the key, so it
+    // does not vanish with the one that is shown first.
+    const targets = hints.some((hint) => hint.id)
+      ? hints.filter((hint) => hint.id)
+      : [hints[0]];
+    targets.forEach((hint) => hint.prepend(keyElement(), ' · '));
   });
 }
 
@@ -3317,24 +3377,9 @@ function initializeRuntimeOverridePills() {
     }
   }
 
-  const overrideKeys = new Set(
-    Array.isArray(parsedOverrideKeys) ? parsedOverrideKeys : []
-  );
-  const lockedEnvKeys = new Set(
-    Array.isArray(parsedLockedEnvKeys) ? parsedLockedEnvKeys : []
-  );
-  if (overrideKeys.size === 0 && lockedEnvKeys.size === 0) {
-    return;
-  }
-
-  const escapeHtml = (value) =>
-    String(value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-
+  // Every field with the variable it writes. Besides the pills below, this
+  // names the variable in each hint and gives the settings search
+  // (modules/settings-nav.js) something to find a field by.
   const fieldMappings = [
     { selector: '#paperlessUrl', envKey: 'PAPERLESS_API_URL' },
     { selector: '#paperlessPublicUrl', envKey: 'PAPERLESS_PUBLIC_URL' },
@@ -3364,6 +3409,16 @@ function initializeRuntimeOverridePills() {
     { selector: '#azureApiKey', envKey: 'AZURE_API_KEY' },
     { selector: '#azureDeploymentName', envKey: 'AZURE_DEPLOYMENT_NAME' },
     { selector: '#azureApiVersion', envKey: 'AZURE_API_VERSION' },
+    { selector: '#anthropicApiKey', envKey: 'ANTHROPIC_API_KEY' },
+    { selector: '#anthropicModel', envKey: 'ANTHROPIC_MODEL' },
+    { selector: '#anthropicEffort', envKey: 'ANTHROPIC_EFFORT' },
+    { selector: '#anthropicMaxTokens', envKey: 'ANTHROPIC_MAX_TOKENS' },
+    {
+      selector: '#anthropicStructuredOutput',
+      envKey: 'ANTHROPIC_STRUCTURED_OUTPUT',
+    },
+    { selector: '#anthropicPromptCaching', envKey: 'ANTHROPIC_PROMPT_CACHING' },
+    { selector: '#anthropicApiUrl', envKey: 'ANTHROPIC_API_URL' },
     { selector: '#tokenLimit', envKey: 'TOKEN_LIMIT' },
     { selector: '#responseTokens', envKey: 'RESPONSE_TOKENS' },
     { selector: '#aiTemperatureAnalysis', envKey: 'AI_TEMPERATURE_ANALYSIS' },
@@ -3400,6 +3455,62 @@ function initializeRuntimeOverridePills() {
     { selector: '#activateTitle', envKey: 'ACTIVATE_TITLE' },
     { selector: '#activateCustomFields', envKey: 'ACTIVATE_CUSTOM_FIELDS' },
     { selector: '#customFieldsJson', envKey: 'CUSTOM_FIELDS' },
+    { selector: '#duplicatesAiReview', envKey: 'DUPLICATES_AI_REVIEW' },
+    { selector: '#duplicatesAiModel', envKey: 'DUPLICATES_AI_MODEL' },
+    {
+      selector: '#duplicatesAiReviewBatchSize',
+      envKey: 'DUPLICATES_AI_REVIEW_BATCH_SIZE',
+    },
+    {
+      selector: '#duplicatesAiCandidateFloor',
+      envKey: 'DUPLICATES_AI_CANDIDATE_FLOOR',
+    },
+    { selector: '#duplicatesAiExcerpts', envKey: 'DUPLICATES_AI_EXCERPTS' },
+    {
+      selector: '#duplicatesAiExcerptChars',
+      envKey: 'DUPLICATES_AI_EXCERPT_CHARS',
+    },
+    {
+      selector: '#duplicatesAiExcerptDocuments',
+      envKey: 'DUPLICATES_AI_EXCERPT_DOCUMENTS',
+    },
+    {
+      selector: '#duplicatesAiTokenBudget',
+      envKey: 'DUPLICATES_AI_TOKEN_BUDGET',
+    },
+    {
+      selector: '#duplicatesAiIdleStopSeconds',
+      envKey: 'DUPLICATES_AI_IDLE_STOP_SECONDS',
+    },
+    { selector: '#duplicatesAiThinking', envKey: 'DUPLICATES_AI_THINKING' },
+    {
+      selector: '#duplicatesAiRequestSeconds',
+      envKey: 'DUPLICATES_AI_REQUEST_SECONDS',
+    },
+    {
+      selector: '#duplicatesAiConcurrency',
+      envKey: 'DUPLICATES_AI_CONCURRENCY',
+    },
+    {
+      selector: '#duplicatesAiVerdictMemoryDays',
+      envKey: 'DUPLICATES_AI_VERDICT_MEMORY_DAYS',
+    },
+    {
+      selector: '#duplicatesGuardNewNames',
+      envKey: 'DUPLICATES_GUARD_NEW_NAMES',
+    },
+    {
+      selector: '#duplicatesAiSweepNames',
+      envKey: 'DUPLICATES_AI_SWEEP_NAMES',
+    },
+    {
+      selector: '#simplifyTagsPerRequest',
+      envKey: 'SIMPLIFY_TAGS_PER_REQUEST',
+    },
+    {
+      selector: '#simplifyVocabularySize',
+      envKey: 'SIMPLIFY_VOCABULARY_SIZE',
+    },
     { selector: '#mistralOcrEnabled', envKey: 'MISTRAL_OCR_ENABLED' },
     { selector: '#ocrProvider', envKey: 'OCR_PROVIDER' },
     { selector: '#ocrApiUrl', envKey: 'OCR_API_URL' },
@@ -3409,6 +3520,19 @@ function initializeRuntimeOverridePills() {
     { selector: '#ocrOpenRouterZdr', envKey: 'OCR_OPENROUTER_ZDR' },
     { selector: '#ocrPdfRenderMaxPages', envKey: 'OCR_PDF_RENDER_MAX_PAGES' },
     { selector: '#ocrPdfRenderDpi', envKey: 'OCR_PDF_RENDER_DPI' },
+    {
+      selector: '#ocrAutoProcessEnabled',
+      envKey: 'OCR_AUTO_PROCESS_ENABLED',
+    },
+    {
+      selector: '#ocrAutoProcessInterval',
+      envKey: 'OCR_AUTO_PROCESS_INTERVAL',
+    },
+    {
+      selector: '#ocrAutoProcessBatchSize',
+      envKey: 'OCR_AUTO_PROCESS_BATCH_SIZE',
+    },
+    { selector: '#ocrAutoAnalyze', envKey: 'OCR_AUTO_ANALYZE' },
     {
       selector: '#ocrValidationTimeout',
       envKey: 'SETUP_OCR_VALIDATION_TIMEOUT_MS',
@@ -3431,6 +3555,7 @@ function initializeRuntimeOverridePills() {
     { selector: '#globalRateLimitMax', envKey: 'GLOBAL_RATE_LIMIT_MAX' },
     { selector: '#trustProxy', envKey: 'TRUST_PROXY' },
     { selector: '#cookieSecureMode', envKey: 'COOKIE_SECURE_MODE' },
+    { selector: '#dateFormat', envKey: 'DATE_FORMAT' },
     { selector: '#minContentLength', envKey: 'MIN_CONTENT_LENGTH' },
     { selector: '#paperlessAiPort', envKey: 'PAPERLESS_AI_PORT' },
     { selector: '#reconciliationEnabled', envKey: 'RECONCILIATION_ENABLED' },
@@ -3442,7 +3567,46 @@ function initializeRuntimeOverridePills() {
       selector: '#externalApiAllowPrivateIps',
       envKey: 'EXTERNAL_API_ALLOW_PRIVATE_IPS',
     },
+    { selector: '#oidcEnabled', envKey: 'OIDC_ENABLED' },
+    { selector: '#oidcIssuerUrl', envKey: 'OIDC_ISSUER_URL' },
+    { selector: '#oidcClientId', envKey: 'OIDC_CLIENT_ID' },
+    { selector: '#oidcClientSecret', envKey: 'OIDC_CLIENT_SECRET' },
+    { selector: '#oidcAdminEmail', envKey: 'OIDC_ADMIN_EMAIL' },
+    { selector: '#oidcRedirectUri', envKey: 'OIDC_REDIRECT_URI' },
+    { selector: '#oidcScopes', envKey: 'OIDC_SCOPES' },
+    { selector: '#oidcEmailClaim', envKey: 'OIDC_EMAIL_CLAIM' },
+    {
+      selector: '#oidcAllowUnverifiedEmail',
+      envKey: 'OIDC_ALLOW_UNVERIFIED_EMAIL',
+    },
+    { selector: '#oidcTokenAuthMethod', envKey: 'OIDC_TOKEN_AUTH_METHOD' },
+    { selector: '#oidcButtonText', envKey: 'OIDC_BUTTON_TEXT' },
+    { selector: '#oidcButtonIcon', envKey: 'OIDC_BUTTON_ICON' },
+    { selector: '#oidcButtonColor', envKey: 'OIDC_BUTTON_COLOR' },
+    { selector: '#oidcButtonTextColor', envKey: 'OIDC_BUTTON_TEXT_COLOR' },
   ];
+
+  annotateEnvKeys(fieldMappings);
+
+  const overrideKeys = new Set(
+    Array.isArray(parsedOverrideKeys) ? parsedOverrideKeys : []
+  );
+  const lockedEnvKeys = new Set(
+    Array.isArray(parsedLockedEnvKeys) ? parsedLockedEnvKeys : []
+  );
+  if (overrideKeys.size === 0 && lockedEnvKeys.size === 0) {
+    return;
+  }
+
+  // Kept local because classic scripts cannot import ES modules; keep in sync
+  // with modules/text-utils.js.
+  const escapeHtml = (value) =>
+    String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
 
   const pills = [];
 
@@ -3452,9 +3616,10 @@ function initializeRuntimeOverridePills() {
       return;
     }
 
-    const container =
-      fieldElement.closest('.space-y-2') ||
-      fieldElement.parentElement?.closest('.space-y-2');
+    // `.space-y-2` was a Tailwind ancestor that no longer exists, so this
+    // returned null for every field and the pills never rendered. Settings
+    // rows are either a plain field or a switch row.
+    const container = fieldElement.closest('.zr-field, .zr-switchrow');
     if (!container) {
       return;
     }
@@ -3475,8 +3640,7 @@ function initializeRuntimeOverridePills() {
       !targetLabel.querySelector('.override-pill')
     ) {
       const pill = document.createElement('span');
-      pill.className =
-        'override-pill inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 cursor-help';
+      pill.className = 'override-pill zr-badge zr-badge--warn';
       pill.textContent = 'Overwritten';
       const overrideDetails = parsedOverrideDetails[envKey] || {};
       const injectedValue = overrideDetails.injected || '[unknown]';
@@ -3496,19 +3660,22 @@ function initializeRuntimeOverridePills() {
     }
 
     if (lockedEnvKeys.has(envKey)) {
+      // The :disabled styling in the framework carries the visual state.
       fieldElement.disabled = true;
       fieldElement.setAttribute('aria-disabled', 'true');
-      fieldElement.classList.add(
-        'bg-gray-100',
-        'text-gray-500',
-        'cursor-not-allowed',
-        'opacity-70'
-      );
+      // A switch is clicked on its visible half; the hidden yes/no input alone
+      // being disabled left the switch movable with nothing to show for it.
+      const lockedSwitch = fieldElement.id
+        ? document.querySelector(`[data-switch-target="${fieldElement.id}"]`)
+        : null;
+      if (lockedSwitch) {
+        lockedSwitch.disabled = true;
+        lockedSwitch.setAttribute('aria-disabled', 'true');
+      }
 
       if (!targetLabel.querySelector('.locked-pill')) {
         const lockedPill = document.createElement('span');
-        lockedPill.className =
-          'locked-pill inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-200 text-slate-700 cursor-help';
+        lockedPill.className = 'locked-pill zr-badge';
         lockedPill.textContent = 'Managed by ENV';
         const lockedDetails = parsedLockedEnvDetails[envKey] || {};
         const managedValue = lockedDetails.managed || '[unknown]';
@@ -3529,7 +3696,7 @@ function initializeRuntimeOverridePills() {
       let lockedHelpText = container.querySelector('.locked-env-help');
       if (!lockedHelpText) {
         lockedHelpText = document.createElement('p');
-        lockedHelpText.className = 'locked-env-help text-xs text-slate-500';
+        lockedHelpText.className = 'locked-env-help zr-xs zr-faint';
         lockedHelpText.textContent =
           'Managed by container environment. Change it in Docker Compose or your container environment, then restart the service.';
         container.appendChild(lockedHelpText);
@@ -3537,21 +3704,13 @@ function initializeRuntimeOverridePills() {
     }
   });
 
-  if (pills.length > 0 && typeof tippy === 'function') {
-    const instances = tippy(
-      pills,
-      getReadableTooltipOptions({
-        maxWidth: 360,
-        content(reference) {
-          return createReadableTooltipContent(
-            reference.getAttribute('data-tooltip') ||
-              'Overwritten by local runtime settings.'
-          );
-        },
-      })
-    );
-    registerTooltipInstances(instances);
-  }
+  // One line of explanation per pill. A native title needs no library, works on
+  // keyboard focus and reads correctly in both themes.
+  pills.forEach((pill) => {
+    pill.title =
+      pill.getAttribute('data-tooltip') ||
+      'Overwritten by local runtime settings.';
+  });
 }
 
 // Custom Fields Management
@@ -3578,13 +3737,6 @@ function initializeCustomFieldsManagement() {
       handle: '.cursor-move',
       onEnd: updateCustomFieldsJson,
     });
-
-    // Add initial theme classes based on current theme
-    const isDarkMode =
-      document.documentElement.getAttribute('data-theme') === 'dark';
-    if (isDarkMode) {
-      updateThemeClasses(true);
-    }
   }
 
   // Initialize type selection
@@ -3606,21 +3758,8 @@ function initializeCustomFieldsManagement() {
     });
   }
 
-  // Observer for theme changes
-  const observer = new MutationObserver(function (mutations) {
-    mutations.forEach(function (mutation) {
-      if (mutation.attributeName === 'data-theme') {
-        const isDark =
-          document.documentElement.getAttribute('data-theme') === 'dark';
-        updateThemeClasses(isDark);
-      }
-    });
-  });
-
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['data-theme'],
-  });
+  // No theme observer here: the framework themes everything through CSS
+  // variables bound to data-theme, so nothing has to be restyled from JS.
 }
 
 class MfaSettingsManager {
@@ -3650,6 +3789,7 @@ class MfaSettingsManager {
     this.enableBtn = document.getElementById('mfaEnableBtn');
     this.verifyBtn = document.getElementById('mfaVerifyBtn');
     this.disableBtn = document.getElementById('mfaDisableBtn');
+    this.tokenField = document.getElementById('mfaTokenField');
 
     this.setupReady = false;
     this.invalidTotpAttempts = 0;
@@ -3678,18 +3818,13 @@ class MfaSettingsManager {
       return;
     }
 
-    this.resultMessage.className = 'rounded-lg p-3 text-sm';
+    this.resultMessage.className = 'zr-alert';
     if (type === 'success') {
-      this.resultMessage.classList.add('theme-alert-success', 'border');
+      this.resultMessage.classList.add('zr-alert--ok');
     } else if (type === 'error') {
-      this.resultMessage.classList.add('theme-alert-error', 'border');
+      this.resultMessage.classList.add('zr-alert--danger');
     } else {
-      this.resultMessage.classList.add(
-        'bg-blue-50',
-        'text-blue-800',
-        'border',
-        'border-blue-200'
-      );
+      this.resultMessage.classList.add('zr-alert--info');
     }
 
     this.resultMessage.textContent = text;
@@ -3702,59 +3837,29 @@ class MfaSettingsManager {
     }
   }
 
+  // The field only ever carries a colour, so the hint below it does the talking.
+  setTokenFieldState(state) {
+    if (!this.tokenInput) {
+      return;
+    }
+    this.tokenInput.classList.toggle('zr-input--invalid', state === 'error');
+    this.tokenInput.classList.toggle('zr-input--valid', state === 'success');
+  }
+
   setTokenHint(type, text) {
     if (!this.tokenHint) {
       return;
     }
 
-    this.tokenHint.className = 'text-xs';
+    this.tokenHint.className = 'zr-xs';
     if (type === 'error') {
-      this.tokenHint.classList.add('text-red-600');
-      this.tokenInput?.classList.add(
-        'border-red-500',
-        'focus:border-red-500',
-        'focus:ring-red-500'
-      );
-      this.tokenInput?.classList.remove(
-        'border-gray-300',
-        'focus:border-blue-500',
-        'focus:ring-blue-500'
-      );
+      this.tokenHint.classList.add('zr-danger-text');
     } else if (type === 'success') {
-      this.tokenHint.classList.add('text-green-600');
-      this.tokenInput?.classList.remove(
-        'border-red-500',
-        'focus:border-red-500',
-        'focus:ring-red-500'
-      );
-      this.tokenInput?.classList.add(
-        'border-green-500',
-        'focus:border-green-500',
-        'focus:ring-green-500'
-      );
-      this.tokenInput?.classList.remove(
-        'border-gray-300',
-        'focus:border-blue-500',
-        'focus:ring-blue-500'
-      );
+      this.tokenHint.classList.add('zr-ok-text');
     } else {
-      this.tokenHint.classList.add('text-gray-500');
-      this.tokenInput?.classList.remove(
-        'border-red-500',
-        'focus:border-red-500',
-        'focus:ring-red-500'
-      );
-      this.tokenInput?.classList.remove(
-        'border-green-500',
-        'focus:border-green-500',
-        'focus:ring-green-500'
-      );
-      this.tokenInput?.classList.add(
-        'border-gray-300',
-        'focus:border-blue-500',
-        'focus:ring-blue-500'
-      );
+      this.tokenHint.classList.add('zr-muted');
     }
+    this.setTokenFieldState(type);
 
     this.tokenHint.textContent = text;
     this.tokenHint.classList.remove('hidden');
@@ -3764,21 +3869,7 @@ class MfaSettingsManager {
     if (this.tokenHint) {
       this.tokenHint.classList.add('hidden');
     }
-    this.tokenInput?.classList.remove(
-      'border-red-500',
-      'focus:border-red-500',
-      'focus:ring-red-500'
-    );
-    this.tokenInput?.classList.remove(
-      'border-green-500',
-      'focus:border-green-500',
-      'focus:ring-green-500'
-    );
-    this.tokenInput?.classList.add(
-      'border-gray-300',
-      'focus:border-blue-500',
-      'focus:ring-blue-500'
-    );
+    this.setTokenFieldState(null);
   }
 
   isInvalidTotpError(error) {
@@ -3821,7 +3912,7 @@ class MfaSettingsManager {
         button.dataset.originalHtml = button.innerHTML;
       }
       button.disabled = true;
-      button.innerHTML = `<i class="fas fa-spinner fa-spin"></i><span>${loadingText}</span>`;
+      button.innerHTML = `<svg class="zr-icon zr-icon--sm zr-icon--spin" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg><span>${loadingText}</span>`;
       return;
     }
 
@@ -3838,23 +3929,34 @@ class MfaSettingsManager {
 
     if (this.statusBadge) {
       this.statusBadge.textContent = this.enabled ? 'Enabled' : 'Disabled';
-      this.statusBadge.className = `px-2 py-1 rounded-full text-xs font-semibold ${
-        this.enabled
-          ? 'bg-green-100 text-green-800'
-          : 'bg-gray-100 text-gray-700'
-      }`;
+      this.statusBadge.className = `zr-badge${this.enabled ? ' zr-badge--ok' : ''}`;
     }
 
+    // Only the controls of the current state exist. With everything rendered
+    // at once the card showed Enable, Disable and Validate side by side, and
+    // which one applied was anyone's guess.
     if (this.disableBtn) {
       this.disableBtn.disabled = !this.enabled;
+      this.disableBtn.classList.toggle('hidden', !this.enabled);
     }
 
     if (this.enableBtn) {
       this.enableBtn.disabled = this.enabled;
+      this.enableBtn.classList.toggle('hidden', this.enabled);
     }
 
     if (this.verifyBtn) {
       this.verifyBtn.disabled = !this.enabled && !this.setupReady;
+    }
+
+    if (this.tokenField) {
+      // Visible during activation (code confirms the pairing) and while
+      // enabled (code check against the authenticator); hidden in the plain
+      // disabled state, where there is nothing to validate against.
+      this.tokenField.classList.toggle(
+        'hidden',
+        !this.enabled && !this.setupReady
+      );
     }
 
     if (this.verifyBtnLabel) {
@@ -4074,7 +4176,7 @@ class MfaSettingsManager {
       return;
     }
 
-    const confirmResult = await Swal.fire({
+    const confirmResult = await zrDialog({
       icon: 'warning',
       title: 'Disable MFA?',
       text: 'Your account will no longer require a TOTP code at login.',
@@ -4210,44 +4312,6 @@ document.addEventListener('DOMContentLoaded', () => {
   new MfaSettingsManager();
 });
 
-function updateThemeClasses(isDark) {
-  // Update custom field items
-  const items = document.querySelectorAll('.custom-field-item');
-  items.forEach((item) => {
-    // Background and border
-    item.classList.toggle('bg-white', !isDark);
-    item.classList.toggle('bg-gray-800', isDark);
-    item.classList.toggle('border-gray-200', !isDark);
-    item.classList.toggle('border-gray-700', isDark);
-
-    // Text colors
-    const title = item.querySelector('p.font-medium');
-    if (title) {
-      title.classList.toggle('text-gray-900', !isDark);
-      title.classList.toggle('text-gray-100', isDark);
-    }
-
-    const subtitle = item.querySelector('p.text-sm');
-    if (subtitle) {
-      subtitle.classList.toggle('text-gray-500', !isDark);
-      subtitle.classList.toggle('text-gray-400', isDark);
-    }
-  });
-
-  // Update form inputs and selects
-  const inputs = document.querySelectorAll(
-    'input:not([type="hidden"]), select'
-  );
-  inputs.forEach((input) => {
-    input.classList.toggle('bg-white', !isDark);
-    input.classList.toggle('bg-gray-800', isDark);
-    input.classList.toggle('text-gray-900', !isDark);
-    input.classList.toggle('text-gray-100', isDark);
-    input.classList.toggle('border-gray-300', !isDark);
-    input.classList.toggle('border-gray-600', isDark);
-  });
-}
-
 function toggleCurrencySelect() {
   const fieldType = document.getElementById('newFieldType').value;
   const currencySelect = document.getElementById('currencyCode');
@@ -4259,27 +4323,40 @@ function toggleCurrencySelect() {
   }
 }
 
+const CUSTOM_FIELD_NAME_SELECTOR = '[data-field-name]';
+const CUSTOM_FIELD_TYPE_SELECTOR = '[data-field-type]';
+
 function updateCustomFieldsJson() {
   const fieldItems = document.querySelectorAll('.custom-field-item');
-  const fields = Array.from(fieldItems).map((item) => {
-    const fieldName = item.querySelector('p.font-medium').textContent;
-    const typeText = item.querySelector('p.text-sm').textContent;
-    const data_type = typeText.split('Type: ')[1].split(' ')[0];
-    const currency = typeText.includes('(')
-      ? typeText.split('(')[1].split(')')[0]
-      : null;
+  const fields = Array.from(fieldItems)
+    .map((item) => {
+      const fieldNameElement = item.querySelector(CUSTOM_FIELD_NAME_SELECTOR);
+      const typeElement = item.querySelector(CUSTOM_FIELD_TYPE_SELECTOR);
+      if (!fieldNameElement || !typeElement) {
+        return null;
+      }
+      const fieldName = fieldNameElement.textContent.trim();
+      const typeText = typeElement.textContent.trim();
+      const data_type = typeText.split('Type: ')[1]?.split(' ')[0];
+      const currencyMatch = typeText.match(/\(([^)]+)\)/);
+      const currency = currencyMatch ? currencyMatch[1] : null;
 
-    const field = {
-      value: fieldName,
-      data_type: data_type,
-    };
+      if (!fieldName || !data_type) {
+        return null;
+      }
 
-    if (currency) {
-      field.currency = currency;
-    }
+      const field = {
+        value: fieldName,
+        data_type: data_type,
+      };
 
-    return field;
-  });
+      if (currency) {
+        field.currency = currency;
+      }
+
+      return field;
+    })
+    .filter(Boolean);
 
   document.getElementById('customFieldsJson').value = JSON.stringify({
     custom_fields: fields,
@@ -4288,11 +4365,7 @@ function updateCustomFieldsJson() {
 
 function createFieldElement(fieldName, data_type, currency = null) {
   const div = document.createElement('div');
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-
-  div.className = `custom-field-item flex items-center gap-2 p-3 rounded-lg border hover:border-blue-500 transition-colors ${
-    isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-  }`;
+  div.className = 'custom-field-item zr-row';
 
   let typeDisplay = `Type: ${data_type}`;
   if (data_type === 'monetary' && currency) {
@@ -4300,19 +4373,24 @@ function createFieldElement(fieldName, data_type, currency = null) {
   }
 
   div.innerHTML = `
-        <div class="cursor-move text-gray-400">
-            <i class="fas fa-grip-vertical"></i>
+        <div class="zr-faint">
+            <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-grip"/></svg>
         </div>
-        <div class="flex-1">
-            <p class="font-medium ${isDark ? 'text-gray-100' : 'text-gray-900'}">${fieldName}</p>
-            <p class="text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}">${typeDisplay}</p>
+        <div class="zr-grow">
+            <p class="zr-strong" data-field-name></p>
+            <p class="zr-sm zr-faint" data-field-type></p>
         </div>
-        <button type="button" 
+        <button type="button"
                 onclick="removeCustomField(this)"
-                class="text-gray-400 hover:text-red-500 transition-colors">
-            <i class="fas fa-trash"></i>
+                class="zr-btn zr-btn--ghost zr-btn--icon zr-btn--danger">
+            <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-trash"/></svg>
         </button>
     `;
+
+  // Field name and type come from user input, so they are assigned as text
+  // instead of being interpolated into the markup above.
+  div.querySelector('[data-field-name]').textContent = fieldName;
+  div.querySelector('[data-field-type]').textContent = typeDisplay;
 
   return div;
 }
@@ -4328,7 +4406,7 @@ function addCustomField() {
   const currency = data_type === 'monetary' ? currencySelect.value : null;
 
   if (!fieldName) {
-    Swal.fire({
+    zrDialog({
       icon: 'warning',
       title: 'Invalid Field Name',
       text: 'Please enter a field name',
@@ -4338,11 +4416,11 @@ function addCustomField() {
 
   // Check for duplicates
   const existingFields = Array.from(
-    fieldsList.querySelectorAll('p.font-medium')
+    fieldsList.querySelectorAll(CUSTOM_FIELD_NAME_SELECTOR)
   ).map((p) => p.textContent);
 
   if (existingFields.includes(fieldName)) {
-    Swal.fire({
+    zrDialog({
       icon: 'warning',
       title: 'Duplicate Field',
       text: 'A field with this name already exists',
@@ -4363,7 +4441,7 @@ function addCustomField() {
 // Called from inline onclick handlers in the settings view.
 window.removeCustomField = function removeCustomField(button) {
   const fieldItem = button.closest('.custom-field-item');
-  Swal.fire({
+  zrDialog({
     title: 'Delete Field?',
     text: 'Are you sure you want to delete this custom field?',
     icon: 'warning',
