@@ -98,6 +98,8 @@ class SetupService {
       AZURE_DEPLOYMENT_NAME: process.env.AZURE_DEPLOYMENT_NAME || '',
       CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL || '',
       CUSTOM_MODEL: process.env.CUSTOM_MODEL || '',
+      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
+      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '',
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
       // config.anthropic runs with the default model when none is set, so an
       // operator who only injects the key has a complete configuration.
@@ -178,6 +180,33 @@ class SetupService {
     }
 
     // For user-defined Mistral-compatible endpoints, allow private networks
+    // (localhost remains controlled by PAPERLESS_AI_SETUP_ALLOW_LOCALHOST).
+    return this.getSetupUrlValidationOptions();
+  }
+
+  // Accepts both a real boolean and the 'yes'/'no' string convention used
+  // throughout this codebase's env-backed config (e.g. options.zdr === 'no'
+  // must NOT be treated as truthy, unlike a naive Boolean(value) coercion).
+  isYesFlag(value) {
+    return (
+      value === true ||
+      String(value ?? '')
+        .trim()
+        .toLowerCase() === 'yes'
+    );
+  }
+
+  getOpenRouterUrlValidationOptions(apiUrl = '') {
+    const normalizedUrl = String(apiUrl || '')
+      .trim()
+      .toLowerCase();
+
+    // Keep strict validation for the official OpenRouter cloud endpoint.
+    if (!normalizedUrl || normalizedUrl.includes('openrouter.ai')) {
+      return { allowPrivateIPs: false, allowLocalhost: false };
+    }
+
+    // For user-defined OpenRouter-compatible endpoints, allow private networks
     // (localhost remains controlled by PAPERLESS_AI_SETUP_ALLOW_LOCALHOST).
     return this.getSetupUrlValidationOptions();
   }
@@ -497,6 +526,61 @@ class SetupService {
     }
   }
 
+  async validateOpenRouterAiConfig(apiKey, model, apiUrl = '', zdr = 'no') {
+    if (!apiKey) {
+      console.error('OpenRouter AI validation error: missing API key');
+      return false;
+    }
+    if (!model) {
+      console.error('OpenRouter AI validation error: missing model');
+      return false;
+    }
+
+    for (const url of this.buildVersionedApiUrlCandidates(
+      apiUrl,
+      'https://openrouter.ai/api/v1',
+      true
+    )) {
+      const urlValidation = await validateApiUrl(
+        url,
+        this.getOpenRouterUrlValidationOptions(url)
+      );
+      if (!urlValidation.valid) {
+        console.error(
+          'OpenRouter AI URL validation error:',
+          urlValidation.error
+        );
+        continue;
+      }
+
+      try {
+        const openai = new OpenAI({
+          apiKey,
+          baseURL: url,
+          timeout: this.getValidationTimeoutMs(),
+        });
+        const completion = await this.withValidationTimeout(
+          openai.chat.completions.create({
+            messages: [{ role: 'user', content: 'Test' }],
+            model,
+            // Validate the actual routing the scan loop will use: with ZDR
+            // enabled, a model without Zero-Data-Retention endpoints must
+            // fail here rather than at processing time.
+            ...(this.isYesFlag(zdr) ? { provider: { zdr: true } } : {}),
+          }),
+          'OpenRouter AI validation'
+        );
+        if (completion.choices && completion.choices.length > 0) {
+          return true;
+        }
+      } catch (error) {
+        console.error('OpenRouter AI validation error:', error.message);
+      }
+    }
+
+    return false;
+  }
+
   async validateOllamaConfig(url, model, apiKey = '') {
     try {
       // Validate URL to prevent SSRF attacks
@@ -778,6 +862,117 @@ class SetupService {
       .filter(Boolean);
   }
 
+  // Defense in depth: the request already asked OpenRouter to filter by
+  // input_modalities=image, but keep a local check so a model missing that
+  // filtering (or an entry without architecture metadata) does not silently
+  // slip a text-only model into the OCR dropdown.
+  extractOpenRouterVisionModelIds(payload) {
+    const candidates = Array.isArray(payload?.data) ? payload.data : [];
+    return candidates
+      .filter((entry) => {
+        const inputModalities = entry?.architecture?.input_modalities;
+        if (!Array.isArray(inputModalities)) {
+          return true;
+        }
+        return (
+          inputModalities.includes('image') || inputModalities.includes('file')
+        );
+      })
+      .map((entry) => String(entry?.id || '').trim())
+      .filter(Boolean);
+  }
+
+  async fetchOpenRouterVisionModels(apiUrl, apiKey = '', options = {}) {
+    const normalizedApiUrl = String(apiUrl || '').replace(/\/+$/, '');
+    const urlValidation = await validateApiUrl(normalizedApiUrl, options);
+    if (!urlValidation.valid) {
+      throw new Error(`Model URL validation failed: ${urlValidation.error}`);
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    const queryParams = new URLSearchParams({
+      input_modalities: 'image',
+      limit: '1000',
+    });
+    if (options.zdr) {
+      queryParams.set('zdr', 'true');
+    }
+
+    const response = await this.withValidationTimeout(
+      axios.get(`${normalizedApiUrl}/models?${queryParams.toString()}`, {
+        headers,
+        timeout: this.getValidationTimeoutMs(),
+      }),
+      'OpenRouter model discovery'
+    );
+
+    if (response.status !== 200) {
+      return [];
+    }
+
+    return this.extractOpenRouterVisionModelIds(response.data);
+  }
+
+  // Defense in depth for the AI-analysis model list: the request already
+  // asked OpenRouter for output_modalities=text, but keep a local check so
+  // image-generation/embedding-only models never reach the AI dropdown.
+  extractOpenRouterTextModelIds(payload) {
+    const candidates = Array.isArray(payload?.data) ? payload.data : [];
+    return candidates
+      .filter((entry) => {
+        const outputModalities = entry?.architecture?.output_modalities;
+        if (!Array.isArray(outputModalities)) {
+          return true;
+        }
+        return outputModalities.includes('text');
+      })
+      .map((entry) => String(entry?.id || '').trim())
+      .filter(Boolean);
+  }
+
+  async fetchOpenRouterChatModels(apiUrl, apiKey = '', options = {}) {
+    const normalizedApiUrl = String(apiUrl || '').replace(/\/+$/, '');
+    const urlValidation = await validateApiUrl(normalizedApiUrl, options);
+    if (!urlValidation.valid) {
+      throw new Error(`Model URL validation failed: ${urlValidation.error}`);
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    // /models/user is not a discovery-time query filter like output_modalities
+    // or zdr above — it returns whatever the user's own OpenRouter account
+    // (provider preferences, privacy settings, guardrails) already allows, so
+    // those two params are meaningless there and are intentionally omitted.
+    const path = options.userModels ? '/models/user' : '/models';
+    const queryParams = options.userModels
+      ? new URLSearchParams({ limit: '1000' })
+      : new URLSearchParams({ output_modalities: 'text', limit: '1000' });
+    if (!options.userModels && options.zdr) {
+      queryParams.set('zdr', 'true');
+    }
+
+    const response = await this.withValidationTimeout(
+      axios.get(`${normalizedApiUrl}${path}?${queryParams.toString()}`, {
+        headers,
+        timeout: this.getValidationTimeoutMs(),
+      }),
+      'OpenRouter model discovery'
+    );
+
+    if (response.status !== 200) {
+      return [];
+    }
+
+    return this.extractOpenRouterTextModelIds(response.data);
+  }
+
   async fetchOpenAiCompatibleModels(apiUrl, apiKey = '', options = {}) {
     const normalizedApiUrl = String(apiUrl || '').replace(/\/+$/, '');
     const urlValidation = await validateApiUrl(normalizedApiUrl, options);
@@ -902,7 +1097,14 @@ class SetupService {
 
     if (
       !provider ||
-      !['openai', 'ollama', 'custom', 'azure', 'anthropic'].includes(provider)
+      ![
+        'openai',
+        'ollama',
+        'custom',
+        'openrouter',
+        'azure',
+        'anthropic',
+      ].includes(provider)
     ) {
       throw new Error('A valid AI provider is required for URL detection');
     }
@@ -931,6 +1133,18 @@ class SetupService {
       );
       return {
         resolvedApiUrl: candidates[0] || 'https://api.openai.com/v1',
+        mode: 'openai',
+      };
+    }
+
+    if (provider === 'openrouter') {
+      const candidates = this.buildVersionedApiUrlCandidates(
+        apiUrl,
+        'https://openrouter.ai/api/v1',
+        true
+      );
+      return {
+        resolvedApiUrl: candidates[0] || 'https://openrouter.ai/api/v1',
         mode: 'openai',
       };
     }
@@ -1000,7 +1214,7 @@ class SetupService {
     const apiUrl = String(options.apiUrl || '').trim();
     const apiKey = String(options.apiKey || '').trim();
 
-    if (!['mistral', 'ollama', 'anthropic'].includes(provider)) {
+    if (!['mistral', 'ollama', 'openrouter', 'anthropic'].includes(provider)) {
       throw new Error('A valid OCR provider is required for URL detection');
     }
 
@@ -1025,6 +1239,22 @@ class SetupService {
       );
       const resolved = {
         resolvedApiUrl: candidates[0] || 'https://api.mistral.ai/v1',
+        mode: 'openai',
+      };
+      this.setupOcrDetectionCache.set(cacheKey, resolved);
+      return resolved;
+    }
+
+    if (provider === 'openrouter') {
+      // Same as Mistral: OpenRouter is a single well-known cloud endpoint,
+      // so autodetection only normalizes the URL rather than probing it.
+      const candidates = this.buildVersionedApiUrlCandidates(
+        apiUrl,
+        'https://openrouter.ai/api/v1',
+        true
+      );
+      const resolved = {
+        resolvedApiUrl: candidates[0] || 'https://openrouter.ai/api/v1',
         mode: 'openai',
       };
       this.setupOcrDetectionCache.set(cacheKey, resolved);
@@ -1090,7 +1320,14 @@ class SetupService {
 
     if (
       !provider ||
-      !['openai', 'ollama', 'custom', 'azure', 'anthropic'].includes(provider)
+      ![
+        'openai',
+        'ollama',
+        'custom',
+        'openrouter',
+        'azure',
+        'anthropic',
+      ].includes(provider)
     ) {
       throw new Error('A valid AI provider is required for model discovery');
     }
@@ -1113,6 +1350,39 @@ class SetupService {
         allowPrivateIPs: false,
         allowLocalhost: false,
       });
+    }
+
+    if (provider === 'openrouter') {
+      if (!apiKey) {
+        throw new Error('API key is required for OpenRouter model discovery');
+      }
+
+      const targetUrls = this.buildVersionedApiUrlCandidates(
+        apiUrl,
+        'https://openrouter.ai/api/v1',
+        true
+      );
+      const allModels = [];
+
+      for (const targetUrl of targetUrls) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const models = await this.fetchOpenRouterChatModels(
+            targetUrl,
+            apiKey,
+            {
+              ...this.getOpenRouterUrlValidationOptions(targetUrl),
+              zdr: this.isYesFlag(options.zdr),
+              userModels: Boolean(options.userModels),
+            }
+          );
+          allModels.push(...models);
+        } catch {
+          // Try alternate base URL variant, e.g. with or without /v1.
+        }
+      }
+
+      return this.dedupeModelIds(allModels);
     }
 
     if (!apiUrl) {
@@ -1176,7 +1446,7 @@ class SetupService {
     const apiUrl = String(options.apiUrl || '').trim();
     const apiKey = String(options.apiKey || '').trim();
 
-    if (!['mistral', 'ollama', 'anthropic'].includes(provider)) {
+    if (!['mistral', 'ollama', 'openrouter', 'anthropic'].includes(provider)) {
       throw new Error('A valid OCR provider is required for model discovery');
     }
 
@@ -1210,6 +1480,40 @@ class SetupService {
             targetUrl,
             apiKey,
             this.getMistralUrlValidationOptions(targetUrl)
+          );
+          allModels.push(...models);
+        } catch {
+          // Try alternate base URL variant, e.g. with or without /v1.
+        }
+      }
+
+      return this.dedupeModelIds(allModels);
+    }
+
+    if (provider === 'openrouter') {
+      if (!apiKey) {
+        throw new Error(
+          'API key is required for OpenRouter OCR model discovery'
+        );
+      }
+
+      const targetUrls = this.buildVersionedApiUrlCandidates(
+        apiUrl,
+        'https://openrouter.ai/api/v1',
+        true
+      );
+      const allModels = [];
+
+      for (const targetUrl of targetUrls) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const models = await this.fetchOpenRouterVisionModels(
+            targetUrl,
+            apiKey,
+            {
+              ...this.getOpenRouterUrlValidationOptions(targetUrl),
+              zdr: this.isYesFlag(options.zdr),
+            }
           );
           allModels.push(...models);
         } catch {
@@ -1340,6 +1644,53 @@ class SetupService {
       .map((page) => String(page?.markdown || ''))
       .join('\n')
       .trim();
+  }
+
+  async runOpenRouterOcrValidationRequest({
+    apiUrl,
+    apiKey,
+    model,
+    imageDataUrl,
+    zdr,
+  }) {
+    const body = {
+      model,
+      temperature: 0,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Read the token in this image and return only that token without extra words.',
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageDataUrl,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    if (zdr) {
+      body.provider = { zdr: true };
+    }
+
+    const response = await this.withValidationTimeout(
+      axios.post(`${apiUrl}/chat/completions`, body, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: this.getValidationTimeoutMs(),
+      }),
+      'OpenRouter OCR content validation'
+    );
+
+    return String(response.data?.choices?.[0]?.message?.content || '').trim();
   }
 
   async runLocalOcrValidationRequest({ apiUrl, apiKey, model, imageDataUrl }) {
@@ -1574,8 +1925,9 @@ class SetupService {
     const model = String(options.model || '').trim();
     const apiKey = String(options.apiKey || '').trim();
     const configuredApiUrl = String(options.apiUrl || '').trim();
+    const zdr = this.isYesFlag(options.zdr);
 
-    if (!['mistral', 'ollama', 'anthropic'].includes(provider)) {
+    if (!['mistral', 'ollama', 'openrouter', 'anthropic'].includes(provider)) {
       console.error('OCR validation error: unsupported provider', provider);
       return false;
     }
@@ -1658,6 +2010,56 @@ class SetupService {
       return false;
     }
 
+    if (provider === 'openrouter') {
+      if (!apiKey) {
+        console.error('OCR validation error: missing OpenRouter API key');
+        return false;
+      }
+
+      for (const apiUrl of this.buildVersionedApiUrlCandidates(
+        configuredApiUrl,
+        'https://openrouter.ai/api/v1',
+        true
+      )) {
+        const urlValidation = await validateApiUrl(
+          apiUrl,
+          this.getOpenRouterUrlValidationOptions(apiUrl)
+        );
+        if (!urlValidation.valid) {
+          console.error(
+            'OpenRouter OCR URL validation error:',
+            urlValidation.error
+          );
+          continue;
+        }
+
+        try {
+          const token = this.getOcrValidationToken();
+          const imageDataUrl = this.buildOcrValidationImageDataUrl(token);
+          const ocrOutput = await this.runOpenRouterOcrValidationRequest({
+            apiUrl,
+            apiKey,
+            model,
+            imageDataUrl,
+            zdr,
+          });
+
+          if (!this.isExpectedOcrTokenPresent(ocrOutput, token)) {
+            console.error(
+              'OpenRouter OCR validation error: OCR output did not match expected token'
+            );
+            continue;
+          }
+
+          return true;
+        } catch (error) {
+          console.error('OpenRouter OCR validation error:', error.message);
+        }
+      }
+
+      return false;
+    }
+
     for (const apiUrl of this.buildVersionedApiUrlCandidates(
       configuredApiUrl,
       'http://localhost:11434'
@@ -1734,6 +2136,83 @@ class SetupService {
     return false;
   }
 
+  // OpenRouter OAuth PKCE key provisioning: exchanges the authorization code
+  // (obtained via the /auth browser redirect) plus the client-held verifier
+  // for a ready-to-use API key. The exchange URL is hardcoded — it is never
+  // built from user input — so there is no SSRF surface here.
+  async exchangeOpenRouterOauthCode({
+    code,
+    codeVerifier,
+    codeChallengeMethod,
+  }) {
+    const normalizedCode = String(code || '').trim();
+    const normalizedVerifier = String(codeVerifier || '').trim();
+    // PKCE method names are case-sensitive ('S256', 'plain'); accept any
+    // input casing but always send the canonical spelling — a lowercased
+    // 's256' makes OpenRouter's challenge verification fail with a 400.
+    const methodInput = String(codeChallengeMethod || '')
+      .trim()
+      .toLowerCase();
+    const canonicalMethod =
+      methodInput === 's256' ? 'S256' : methodInput === 'plain' ? 'plain' : '';
+
+    if (!normalizedCode) {
+      throw new Error('An authorization code is required.');
+    }
+    if (!normalizedVerifier) {
+      throw new Error('A code verifier is required.');
+    }
+    if (!canonicalMethod) {
+      throw new Error('An unsupported code challenge method was provided.');
+    }
+
+    let response;
+    try {
+      response = await this.withValidationTimeout(
+        axios.post(
+          'https://openrouter.ai/api/v1/auth/keys',
+          {
+            code: normalizedCode,
+            code_verifier: normalizedVerifier,
+            code_challenge_method: canonicalMethod,
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: this.getValidationTimeoutMs(),
+          }
+        ),
+        'OpenRouter OAuth key exchange'
+      );
+    } catch (error) {
+      // Surface OpenRouter's own error text instead of axios' generic
+      // "Request failed with status code NNN". Never include the code,
+      // verifier, or key in the message.
+      const upstreamMessage = String(
+        error?.response?.data?.error?.message ||
+          error?.response?.data?.message ||
+          ''
+      ).trim();
+      if (upstreamMessage) {
+        throw new Error(
+          `OpenRouter rejected the key exchange: ${upstreamMessage}`,
+          {
+            cause: error,
+          }
+        );
+      }
+      throw error;
+    }
+
+    const key = String(response.data?.key || '').trim();
+    if (!key) {
+      throw new Error(
+        'OpenRouter did not return an API key for this authorization code.'
+      );
+    }
+
+    return key;
+  }
+
   async validateConfig(config) {
     // Validate Paperless config
     const paperlessApiUrl = stripTrailingSlashes(
@@ -1777,6 +2256,16 @@ class SetupService {
       );
       if (!customValid) {
         throw new Error('Invalid Custom AI configuration');
+      }
+    } else if (aiProvider === 'openrouter') {
+      const openrouterValid = await this.validateOpenRouterAiConfig(
+        config.OPENROUTER_API_KEY,
+        config.OPENROUTER_MODEL,
+        config.OPENROUTER_BASE_URL || '',
+        config.OPENROUTER_ZDR || 'no'
+      );
+      if (!openrouterValid) {
+        throw new Error('Invalid OpenRouter configuration');
       }
     } else if (aiProvider === 'azure') {
       const azureValid = await this.validateAzureConfig(
@@ -1917,6 +2406,13 @@ class SetupService {
       return (
         Boolean(String(config.ANTHROPIC_API_KEY || '').trim()) &&
         Boolean(String(config.ANTHROPIC_MODEL || '').trim())
+      );
+    }
+
+    if (aiProvider === 'openrouter') {
+      return (
+        Boolean(String(config.OPENROUTER_API_KEY || '').trim()) &&
+        Boolean(String(config.OPENROUTER_MODEL || '').trim())
       );
     }
 

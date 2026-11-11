@@ -384,6 +384,28 @@
                                 <label for="aiToken" class="zr-field__name">API key</label>
                                 <input id="aiToken" type="password" class="zr-input" placeholder="Enter token if required">
                                 <p class="zr-field__hint">For Ollama and custom endpoints, this field can stay empty if the API does not require authentication.</p>
+                                <div id="aiOpenRouterConnectRow" class="hidden">
+                                    <button type="button" id="aiOpenRouterConnectBtn" class="zr-btn">
+                                        <svg class="zr-icon" aria-hidden="true"><use href="/icons.svg#i-key"/></svg>
+                                        <span>Connect OpenRouter account</span>
+                                    </button>
+                                    <p class="zr-field__hint">Creates an API key in your OpenRouter account via OAuth — no manual copy/paste.</p>
+                                </div>
+                            </div>
+                            <div id="aiOpenRouterZdrRow" class="zr-field zr-field--stacked zr-formgrid__wide hidden">
+                                <label for="aiOpenRouterZdr" class="zr-field__name">OpenRouter Zero Data Retention only</label>
+                                <select id="aiOpenRouterZdr" class="zr-input">
+                                    <option value="no" <%= config.OPENROUTER_ZDR === 'yes' ? '' : 'selected' %>>No</option>
+                                    <option value="yes" <%= config.OPENROUTER_ZDR === 'yes' ? 'selected' : '' %>>Yes</option>
+                                </select>
+                                <p class="zr-field__hint">Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models.</p>
+                            </div>
+                            <div id="aiOpenRouterUserModelsRow" class="zr-field zr-field--stacked zr-formgrid__wide hidden">
+                                <div class="zr-row">
+                                    <input type="checkbox" id="aiOpenRouterUserModels" class="zr-toggle">
+                                    <label for="aiOpenRouterUserModels" class="zr-field__name">Use my OpenRouter account's model list</label>
+                                </div>
+                                <p class="zr-field__hint">Filters by your OpenRouter account's provider preferences, privacy settings, and guardrails instead of the public catalog. Not saved — applies only to this fetch.</p>
                             </div>
                             <div class="zr-field zr-field--stacked zr-formgrid__wide">
                                 <label for="aiModel" class="zr-field__name">Model</label>
@@ -439,6 +461,7 @@
                             <select id="ocrProvider" class="zr-input">
                                 <option value="mistral" <%= (config.OCR_PROVIDER || 'mistral') === 'mistral' ? 'selected' : '' %>>Mistral OCR API</option>
                                 <option value="custom" <%= ((config.OCR_PROVIDER || 'mistral') === 'custom' || (config.OCR_PROVIDER || 'mistral') === 'ollama') ? 'selected' : '' %>>Custom (Ollama, LM Studio, local models)</option>
+                                <option value="openrouter" <%= (config.OCR_PROVIDER || 'mistral') === 'openrouter' ? 'selected' : '' %>>OpenRouter</option>
                                 <option value="anthropic" <%= (config.OCR_PROVIDER || 'mistral') === 'anthropic' ? 'selected' : '' %>>Claude (Anthropic)</option>
                             </select>
                         </div>
@@ -453,6 +476,21 @@
                             <input id="ocrApiKey" type="password" class="zr-input" placeholder="Required for Mistral" data-placeholder-default="Required for Mistral" data-placeholder-anthropic="Optional">
                             <p id="ocrApiKeyHint" class="zr-field__hint">Optional for local and custom OCR providers.</p>
                             <p id="ocrApiKeyAnthropicHint" class="zr-field__hint hidden">Empty uses the Anthropic API key from the AI provider.</p>
+                            <div id="openRouterConnectRow" class="hidden">
+                                <button type="button" id="openRouterConnectBtn" class="zr-btn">
+                                    <svg class="zr-icon" aria-hidden="true"><use href="/icons.svg#i-key"/></svg>
+                                    <span>Connect OpenRouter account</span>
+                                </button>
+                                <p class="zr-field__hint">Creates an API key in your OpenRouter account via OAuth — no manual copy/paste.</p>
+                            </div>
+                        </div>
+                        <div id="ocrOpenRouterZdrRow" class="zr-field zr-field--stacked hidden">
+                            <label for="ocrOpenRouterZdr" class="zr-field__name">OpenRouter Zero Data Retention only</label>
+                            <select id="ocrOpenRouterZdr" class="zr-input">
+                                <option value="no" <%= config.OCR_OPENROUTER_ZDR === 'yes' ? '' : 'selected' %>>No</option>
+                                <option value="yes" <%= config.OCR_OPENROUTER_ZDR === 'yes' ? 'selected' : '' %>>Yes</option>
+                            </select>
+                            <p class="zr-field__hint">Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models.</p>
                         </div>
                         <div class="zr-field zr-field--stacked">
                             <label for="mistralOcrModel" class="zr-field__name">OCR model</label>

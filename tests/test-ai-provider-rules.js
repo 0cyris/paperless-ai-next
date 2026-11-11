@@ -16,6 +16,7 @@ function run() {
     'custom',
     'ollama',
     'openai',
+    'openrouter',
   ]);
   assert.strictEqual(rules.normalizeProvider(' Ollama '), 'ollama');
   assert.strictEqual(rules.normalizeProvider('nope'), 'openai');

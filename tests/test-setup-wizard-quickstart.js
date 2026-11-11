@@ -124,6 +124,10 @@ const elementIds = [
   'ocrApiUrlContainer',
   'ocrApiKeyContainer',
   'ocrApiKey',
+  'ocrOpenRouterZdr',
+  'ocrOpenRouterZdrRow',
+  'openRouterConnectRow',
+  'openRouterConnectBtn',
   'mistralOcrModel',
   'fetchOcrModelsBtn',
   'ocrValidationTimeout',
@@ -247,6 +251,7 @@ const mockFetch = async (url, options = {}) => {
 global.window = {
   __SETUP_BOOTSTRAP__: { config: {}, defaults: {}, aiProviderPresets: [] },
   fetch: mockFetch,
+  addEventListener: () => {},
 };
 
 // The wizard's request() helper calls the bare global fetch.

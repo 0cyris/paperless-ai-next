@@ -111,6 +111,7 @@ function loadWizard(config) {
   global.window = {
     __SETUP_BOOTSTRAP__: { config, defaults: {}, aiProviderPresets: [] },
     fetch: async () => ({}),
+    addEventListener: () => {},
   };
   global.document = {
     addEventListener: (_event, callback) => callback(),

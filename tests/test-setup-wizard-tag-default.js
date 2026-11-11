@@ -124,6 +124,10 @@ const elementIds = [
   'ocrApiUrlContainer',
   'ocrApiKeyContainer',
   'ocrApiKey',
+  'ocrOpenRouterZdr',
+  'ocrOpenRouterZdrRow',
+  'openRouterConnectRow',
+  'openRouterConnectBtn',
   'mistralOcrModel',
   'fetchOcrModelsBtn',
   'ocrValidationTimeout',
@@ -148,6 +152,7 @@ const steps = Array.from({ length: 7 }, (_unused, index) => ({
 global.window = {
   __SETUP_BOOTSTRAP__: { config: {}, defaults: {}, aiProviderPresets: [] },
   fetch: async () => ({}),
+  addEventListener: () => {},
 };
 
 global.document = {

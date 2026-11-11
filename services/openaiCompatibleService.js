@@ -201,6 +201,25 @@ const PROFILES = Object.freeze({
       return { status: 'ok', model };
     },
   },
+  openrouter: {
+    label: 'OpenRouter',
+    model: () => config.openRouter.model,
+    connection: () => ({
+      baseURL: config.openRouter.apiUrl,
+      apiKey: config.openRouter.apiKey || CUSTOM_PROVIDER_FALLBACK_API_KEY,
+    }),
+    createClient: (options) => new OpenAI(options),
+    generateRemedy: RESPONSE_TOKENS_REMEDY,
+    streamUsage: () => true,
+    // Zero-Data-Retention routing: OpenRouter takes a `provider` routing
+    // object; the openai SDK passes unknown top-level params through.
+    requestExtras: () =>
+      config.openRouter.zdr === 'yes' ? { provider: { zdr: true } } : {},
+    async checkStatus(service, client) {
+      await client.models.list();
+      return { status: 'ok', model: service.model() };
+    },
+  },
   custom: {
     label: 'Custom OpenAI',
     model: () => config.custom.model,
@@ -224,7 +243,7 @@ const REFUSAL_MARKERS = ["i'm sorry", 'i cannot', 'insufficient'];
 
 class OpenAICompatibleService {
   /**
-   * @param {'openai'|'azure'|'custom'} providerId
+   * @param {'openai'|'azure'|'custom'|'openrouter'} providerId
    */
   constructor(providerId) {
     if (!PROFILES[providerId]) {
@@ -428,6 +447,7 @@ class OpenAICompatibleService {
       if (rules.temperature) {
         request.temperature = config.aiTemperatureAnalysis;
       }
+      Object.assign(request, this.profile.requestExtras?.());
 
       const response = await client.chat.completions.create(request);
 
@@ -612,7 +632,11 @@ class OpenAICompatibleService {
           : prompt,
     });
 
-    const request = { model, messages };
+    const request = {
+      model,
+      messages,
+      ...this.profile.requestExtras?.(),
+    };
     if (rules.temperature) {
       request.temperature = hasNumber(options.temperature)
         ? options.temperature

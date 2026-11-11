@@ -1108,6 +1108,12 @@ class EntityMatchAiService {
         return process.env.OLLAMA_MODEL || runtimeConfig.ollama?.model || null;
       case 'custom':
         return process.env.CUSTOM_MODEL || runtimeConfig.custom?.model || null;
+      case 'openrouter':
+        return (
+          process.env.OPENROUTER_MODEL ||
+          runtimeConfig.openRouter?.model ||
+          null
+        );
       case 'azure':
         return (
           process.env.AZURE_DEPLOYMENT_NAME ||

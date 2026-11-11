@@ -363,6 +363,7 @@
                                             <option value="openai" <%= config.AI_PROVIDER === 'openai' ? 'selected' : '' %>>OpenAI (ChatGPT)</option>
                                             <option value="ollama" <%= config.AI_PROVIDER === 'ollama' ? 'selected' : '' %>>Ollama (Local LLM)</option>
                                             <option value="custom" <%= config.AI_PROVIDER === 'custom' ? 'selected' : '' %>>Custom</option>
+                                            <option value="openrouter" <%= config.AI_PROVIDER === 'openrouter' ? 'selected' : '' %>>OpenRouter</option>
                                             <option value="azure" <%= config.AI_PROVIDER === 'azure' ? 'selected' : '' %>>Azure</option>
                                             <option value="anthropic" <%= anthropicSelected ? 'selected' : '' %>>Anthropic (Claude)</option>
                                         </select>
@@ -436,6 +437,47 @@
                                             </div>
                                             <p class="zr-field__hint">Fetch Models lists the models the endpoint offers.</p>
                                         </div>
+                                    </div>
+
+                                    <div id="openrouterSettings" class="zr-col zr-col--loose <%= aiBlockHidden('openrouter') %>">
+                                        <div class="zr-field zr-field--stacked">
+                                            <label for="openrouterKey" class="zr-field__name">OpenRouter API Key</label>
+                                            <div class="zr-inputgroup">
+                                                <input type="password" id="openrouterKey" name="openrouterKey" value="" class="zr-input" autocomplete="off" placeholder="<%= configuredSecrets.OPENROUTER_API_KEY ? 'Configured' : 'sk-or-v1-...' %>">
+                                                <button type="button" class="zr-btn zr-btn--ghost zr-btn--icon zr-input__reveal" data-input="openrouterKey"><svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-eye"/></svg></button>
+                                            </div>
+                                            <p class="zr-field__hint"><%= configuredSecrets.OPENROUTER_API_KEY ? 'Leave empty to keep the stored key.' : '' %></p>
+                                            <div class="zr-field zr-field--stacked">
+                                                <button type="button" id="openRouterAiConnectBtn" class="zr-btn">
+                                                    <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-key"/></svg>
+                                                    <span>Connect OpenRouter account</span>
+                                                </button>
+                                                <p class="zr-field__hint">Creates an API key in your OpenRouter account via OAuth — no manual copy/paste.</p>
+                                            </div>
+                                        </div>
+                                        <%- include('partials/settings-switch', {
+                                            id: 'openrouterZdr',
+                                            label: 'Zero Data Retention only',
+                                            checked: config.OPENROUTER_ZDR === 'yes',
+                                            hint: 'Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models'
+                                        }) %>
+                                        <div class="zr-field zr-field--stacked">
+                                            <label for="openrouterModel" class="zr-field__name">OpenRouter Model</label>
+                                            <div class="zr-inputgroup">
+                                                <select id="openrouterModel" name="openrouterModel" class="zr-input">
+                                                    <option value="<%= config.OPENROUTER_MODEL %>" selected><%= config.OPENROUTER_MODEL %></option>
+                                                </select>
+                                                <button type="button" id="fetchOpenrouterAiModelsBtn" class="zr-btn">
+                                                    <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-list"/></svg>
+                                                    <span>Fetch Models</span>
+                                                </button>
+                                            </div>
+                                            <div class="zr-row">
+                                                <input type="checkbox" id="openrouterUserModels" class="zr-toggle">
+                                                <label for="openrouterUserModels" class="zr-field__name">Use my OpenRouter account's model list</label>
+                                            </div>
+                                            <p class="zr-field__hint">Filters by your OpenRouter account's provider preferences, privacy settings, and guardrails instead of the public catalog. Not saved — applies only to this fetch.</p>
+                                                                                    </div>
                                     </div>
 
                                     <div id="azureSettings" class="zr-col zr-col--loose <%= aiBlockHidden('azure') %>">
@@ -712,6 +754,7 @@
                                         <select id="ocrProvider" name="ocrProvider" class="zr-input">
                                             <option value="mistral" <%= (config.OCR_PROVIDER || 'mistral') === 'mistral' ? 'selected' : '' %>>Mistral OCR API</option>
                                             <option value="custom" <%= ((config.OCR_PROVIDER || 'mistral') === 'custom' || (config.OCR_PROVIDER || 'mistral') === 'ollama') ? 'selected' : '' %>>Custom (Ollama, LM Studio, local models)</option>
+                                            <option value="openrouter" <%= (config.OCR_PROVIDER || 'mistral') === 'openrouter' ? 'selected' : '' %>>OpenRouter</option>
                                             <option value="anthropic" <%= ocrStoredForAnthropic ? 'selected' : '' %>>Claude (Anthropic)</option>
                                         </select>
                                     </div>
@@ -728,6 +771,21 @@
                                         </div>
                                         <p id="ocrApiKeyHint" class="zr-field__hint <%= ocrStoredForAnthropic ? 'hidden' : '' %>">Optional for local and custom providers<%= ocrKeyConfiguredDefault ? ' · Leave empty to keep the stored value' : '' %></p>
                                         <p id="ocrApiKeyAnthropicHint" class="zr-field__hint <%= ocrStoredForAnthropic ? '' : 'hidden' %>"><%= ocrKeyConfiguredAnthropic ? 'Leave empty to keep the stored value' : 'Empty uses the Anthropic API key from the AI provider' %></p>
+                                        <div id="openRouterConnectContainer" class="zr-field zr-field--stacked hidden">
+                                            <button type="button" id="openRouterConnectBtn" class="zr-btn">
+                                                <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-key"/></svg>
+                                                <span>Connect OpenRouter account</span>
+                                            </button>
+                                            <p class="zr-field__hint">Creates an API key in your OpenRouter account via OAuth — no manual copy/paste.</p>
+                                        </div>
+                                    </div>
+                                    <div id="ocrOpenRouterZdrContainer" class="hidden">
+                                        <%- include('partials/settings-switch', {
+                                            id: 'ocrOpenRouterZdr',
+                                            label: 'Zero Data Retention only',
+                                            checked: config.OCR_OPENROUTER_ZDR === 'yes',
+                                            hint: 'Route only to OpenRouter endpoints that do not retain prompts; also limits model discovery to ZDR-capable models'
+                                        }) %>
                                     </div>
                                     <div class="zr-field zr-field--stacked">
                                         <label for="mistralOcrModel" class="zr-field__name">OCR Model</label>

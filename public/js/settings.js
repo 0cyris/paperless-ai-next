@@ -176,6 +176,7 @@ class FormManager {
     const openaiSettings = document.getElementById('openaiSettings');
     const ollamaSettings = document.getElementById('ollamaSettings');
     const customSettings = document.getElementById('customSettings');
+    const openrouterSettings = document.getElementById('openrouterSettings');
     const azureSettings = document.getElementById('azureSettings');
     const anthropicSettings = document.getElementById('anthropicSettings');
 
@@ -186,6 +187,7 @@ class FormManager {
     const customBaseUrl = document.getElementById('customBaseUrl');
     const customApiKey = document.getElementById('customApiKey');
     const customModel = document.getElementById('customModel');
+    const openrouterModel = document.getElementById('openrouterModel');
     const azureApiKey = document.getElementById('azureApiKey');
     const azureEndpoint = document.getElementById('azureEndpoint');
     const azureDeploymentName = document.getElementById('azureDeploymentName');
@@ -195,6 +197,7 @@ class FormManager {
       !openaiSettings ||
       !ollamaSettings ||
       !customSettings ||
+      !openrouterSettings ||
       !azureSettings
     ) {
       return;
@@ -204,6 +207,7 @@ class FormManager {
     openaiSettings.classList.add('hidden');
     ollamaSettings.classList.add('hidden');
     customSettings.classList.add('hidden');
+    openrouterSettings.classList.add('hidden');
     azureSettings.classList.add('hidden');
     anthropicSettings?.classList.add('hidden');
 
@@ -218,6 +222,7 @@ class FormManager {
     customBaseUrl.required = false;
     customApiKey.required = false;
     customModel.required = false;
+    openrouterModel.required = false;
     azureApiKey.required = false;
     azureEndpoint.required = false;
     azureDeploymentName.required = false;
@@ -237,6 +242,10 @@ class FormManager {
         customSettings.classList.remove('hidden');
         customBaseUrl.required = true;
         customModel.required = true;
+        break;
+      case 'openrouter':
+        openrouterSettings.classList.remove('hidden');
+        openrouterModel.required = true;
         break;
       case 'azure':
         azureSettings.classList.remove('hidden');
@@ -623,6 +632,12 @@ function initializeFormHandlers() {
   const customBaseUrlInput = document.getElementById('customBaseUrl');
   const customApiKeyInput = document.getElementById('customApiKey');
   const customModelInput = document.getElementById('customModel');
+  const openrouterKeyInput = document.getElementById('openrouterKey');
+  const openrouterModelInput = document.getElementById('openrouterModel');
+  const openrouterZdrInput = document.getElementById('openrouterZdr');
+  const openrouterUserModelsInput = document.getElementById(
+    'openrouterUserModels'
+  );
   const fetchAiModelsBtn = document.getElementById('fetchAiModelsBtn');
   const fetchCustomAiModelsBtn = document.getElementById(
     'fetchCustomAiModelsBtn'
@@ -632,6 +647,9 @@ function initializeFormHandlers() {
   const anthropicApiUrlInput = document.getElementById('anthropicApiUrl');
   const fetchAnthropicModelsBtn = document.getElementById(
     'fetchAnthropicModelsBtn'
+  );
+  const fetchOpenrouterAiModelsBtn = document.getElementById(
+    'fetchOpenrouterAiModelsBtn'
   );
 
   const ocrEnabledSelect = document.getElementById('mistralOcrEnabled');
@@ -648,6 +666,10 @@ function initializeFormHandlers() {
   const fetchOcrModelsBtn = document.getElementById('fetchOcrModelsBtn');
   const testOcrBtn = document.getElementById('testOcrBtn');
   const ocrTestState = document.getElementById('ocrTestState');
+  const openRouterConnectBtn = document.getElementById('openRouterConnectBtn');
+  const openRouterAiConnectBtn = document.getElementById(
+    'openRouterAiConnectBtn'
+  );
 
   const setButtonLoading = (button, loading, loadingText = 'Loading...') => {
     if (!button) return;
@@ -780,6 +802,13 @@ function initializeFormHandlers() {
           apiUrl: read('ollamaUrl'),
           token: read('ollamaApiKey'),
         };
+      case 'openrouter':
+        return {
+          discovery: true,
+          apiUrl: 'https://openrouter.ai/api/v1',
+          token: read('openrouterKey'),
+          zdr: openrouterZdrInput?.value === 'yes',
+        };
       case 'anthropic':
         return {
           discovery: true,
@@ -832,6 +861,14 @@ function initializeFormHandlers() {
           .trim()
           .replace(/\/+$/, ''),
         model: String(anthropicModelInput?.value || '').trim(),
+      };
+    }
+
+    if (provider === 'openrouter') {
+      return {
+        provider,
+        apiUrl: 'https://openrouter.ai/api/v1',
+        model: String(openrouterModelInput?.value || '').trim(),
       };
     }
 
@@ -939,6 +976,13 @@ function initializeFormHandlers() {
         anthropicApiKeyInput.placeholder !== 'Configured'
       ) {
         anthropicApiKeyInput.placeholder = preset.tokenPlaceholder;
+      }
+    } else if (provider === 'openrouter') {
+      if (openrouterModelInput)
+        openrouterModelInput.value = String(preset.model || '').trim();
+      if (openrouterKeyInput) {
+        openrouterKeyInput.placeholder =
+          preset.tokenPlaceholder || openrouterKeyInput.placeholder;
       }
     }
 
@@ -1246,6 +1290,67 @@ function initializeFormHandlers() {
     });
   }
 
+  if (fetchOpenrouterAiModelsBtn) {
+    fetchOpenrouterAiModelsBtn.addEventListener('click', async () => {
+      const provider = String(
+        aiProviderSelect?.value || 'openrouter'
+      ).toLowerCase();
+      const apiUrl = 'https://openrouter.ai/api/v1';
+      const token = String(openrouterKeyInput?.value || '').trim();
+
+      if (provider !== 'openrouter') {
+        await zrDialog({
+          icon: 'info',
+          title: 'Switch provider',
+          text: 'Use this button with AI Provider set to OpenRouter.',
+        });
+        return;
+      }
+
+      setButtonLoading(fetchOpenrouterAiModelsBtn, true);
+      try {
+        const result = await fetchModels('/api/settings/ai/models', {
+          aiProvider: provider,
+          apiUrl,
+          token,
+          zdr: openrouterZdrInput?.value === 'yes',
+          userModels: Boolean(openrouterUserModelsInput?.checked),
+        });
+        const models = result.models;
+
+        populateModelSelect(
+          openrouterModelInput,
+          models,
+          'Select OpenRouter model'
+        );
+        await zrDialog({
+          icon: 'success',
+          title: 'Models loaded',
+          text:
+            models.length > 0
+              ? `Found ${models.length} model(s).`
+              : 'No models found.',
+        });
+        refreshAiPresetSelection();
+      } catch (error) {
+        const errorDetails = getTimeoutAwareErrorDetails(
+          'AI model discovery',
+          error,
+          null
+        );
+        await zrDialog({
+          icon: 'error',
+          title: errorDetails.isTimeout
+            ? 'AI timeout reached'
+            : 'Loading failed',
+          text: errorDetails.message,
+        });
+      } finally {
+        setButtonLoading(fetchOpenrouterAiModelsBtn, false);
+      }
+    });
+  }
+
   /* Model pickers: "Other…" reveals the text field and the typed id becomes
      the value of that option; Fetch models asks the provider selected above,
      with the URL and key typed in its block (empty key = the stored one). */
@@ -1299,6 +1404,7 @@ function initializeFormHandlers() {
           aiProvider: provider,
           apiUrl: connection.apiUrl,
           token: connection.token,
+          ...(connection.zdr ? { zdr: true } : {}),
         });
         populateModelSelect(
           select,
@@ -1368,7 +1474,7 @@ function initializeFormHandlers() {
 
   const normalizeOcrProviderForApi = (provider) => {
     const normalized = String(provider || 'mistral').toLowerCase();
-    return ['custom', 'anthropic'].includes(normalized)
+    return ['custom', 'openrouter', 'anthropic'].includes(normalized)
       ? normalized
       : 'mistral';
   };
@@ -1440,7 +1546,7 @@ function initializeFormHandlers() {
     if (ocrApiUrlContainer) {
       ocrApiUrlContainer.classList.toggle(
         'hidden',
-        !enabled || !['custom', 'anthropic'].includes(provider)
+        !enabled || !['custom', 'openrouter', 'anthropic'].includes(provider)
       );
     }
 
@@ -1483,7 +1589,27 @@ function initializeFormHandlers() {
     if (ocrPdfRenderContainer) {
       ocrPdfRenderContainer.classList.toggle(
         'hidden',
-        !enabled || provider !== 'custom'
+        !enabled || (provider !== 'custom' && provider !== 'openrouter')
+      );
+    }
+
+    const ocrOpenRouterZdrContainer = document.getElementById(
+      'ocrOpenRouterZdrContainer'
+    );
+    if (ocrOpenRouterZdrContainer) {
+      ocrOpenRouterZdrContainer.classList.toggle(
+        'hidden',
+        !enabled || provider !== 'openrouter'
+      );
+    }
+
+    const openRouterConnectContainer = document.getElementById(
+      'openRouterConnectContainer'
+    );
+    if (openRouterConnectContainer) {
+      openRouterConnectContainer.classList.toggle(
+        'hidden',
+        !enabled || provider !== 'openrouter'
       );
     }
 
@@ -2059,6 +2185,7 @@ function initializeFormHandlers() {
           (ocrProviderSelect?.value === 'anthropic'
             ? ''
             : 'mistral-ocr-latest'),
+        zdr: document.getElementById('ocrOpenRouterZdr')?.value === 'yes',
         setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
         ...getAnthropicFallbackForOcr(),
       };
@@ -2145,6 +2272,7 @@ function initializeFormHandlers() {
             provider,
             apiUrl,
             apiKey,
+            zdr: document.getElementById('ocrOpenRouterZdr')?.value === 'yes',
             setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
             ...getAnthropicFallbackForOcr(),
           }),
@@ -2207,6 +2335,207 @@ function initializeFormHandlers() {
         setButtonLoading(fetchOcrModelsBtn, false);
       }
     });
+  }
+
+  const base64UrlEncode = (bytes) => {
+    let binary = '';
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte);
+    });
+    return btoa(binary)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  };
+
+  if (openRouterConnectBtn || openRouterAiConnectBtn) {
+    const handleOpenRouterCode = async (code) => {
+      const stored = sessionStorage.getItem('openrouterOauth');
+      sessionStorage.removeItem('openrouterOauth');
+      if (!stored) {
+        await zrDialog({
+          icon: 'error',
+          title: 'OpenRouter connection failed',
+          text: 'The OAuth session expired. Please try connecting again.',
+        });
+        return;
+      }
+
+      const {
+        verifier: storedVerifier,
+        method: storedMethod,
+        target: storedTarget,
+      } = JSON.parse(stored);
+
+      try {
+        const response = await fetch(
+          '/api/settings/openrouter/oauth/exchange',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              code,
+              codeVerifier: storedVerifier,
+              codeChallengeMethod: storedMethod,
+            }),
+          }
+        );
+
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+          throw new Error(
+            result.error || result.message || 'OpenRouter connection failed'
+          );
+        }
+
+        if (storedTarget === 'ai') {
+          if (openrouterKeyInput) {
+            openrouterKeyInput.value = result.data.key;
+          }
+          if (aiProviderSelect) {
+            aiProviderSelect.value = 'openrouter';
+            aiProviderSelect.dispatchEvent(new Event('change'));
+          }
+          refreshAiPresetSelection();
+        } else {
+          if (ocrApiKeyInput) {
+            ocrApiKeyInput.value = result.data.key;
+          }
+          if (ocrProviderSelect) {
+            ocrProviderSelect.value = 'openrouter';
+          }
+          toggleOcrFields();
+          setOcrTestPill('default', 'Not tested');
+        }
+
+        await zrDialog({
+          icon: 'success',
+          title: 'OpenRouter connected',
+          text: 'Key created — remember to save settings to persist it.',
+        });
+      } catch (error) {
+        await zrDialog({
+          icon: 'error',
+          title: 'OpenRouter connection failed',
+          text: error.message || 'Could not exchange OpenRouter OAuth code.',
+        });
+      }
+    };
+
+    // Two independent hand-off channels for the authorization code: postMessage
+    // relies on window.opener, which OpenRouter's own Cross-Origin-Opener-Policy
+    // header can permanently sever once the popup navigates there; the
+    // storage event does not depend on window.opener at all, so it is the
+    // reliable path. Both are registered once, up front, not per click.
+    window.addEventListener('message', (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'openrouter-oauth-code') return;
+      handleOpenRouterCode(event.data.code);
+    });
+
+    window.addEventListener('storage', (event) => {
+      if (event.key !== 'openrouterOauthCode' || !event.newValue) return;
+      localStorage.removeItem('openrouterOauthCode');
+      try {
+        const { code } = JSON.parse(event.newValue);
+        if (code) handleOpenRouterCode(code);
+      } catch {
+        // Ignore malformed value.
+      }
+    });
+
+    const startOpenRouterConnect = async (button, target) => {
+      // OpenRouter registers/updates an "app" record keyed by callback_url
+      // on every /auth visit; firing two requests for the same callback_url
+      // in quick succession (e.g. a double click) can race on that record
+      // and returns a 409 from OpenRouter. Guard against that here.
+      if (button.disabled) return;
+
+      // OpenRouter's docs only document localhost (any port) as a supported
+      // non-HTTPS callback_url; a private LAN IP over plain HTTP (the common
+      // self-hosted deployment) is neither localhost nor publicly reachable,
+      // and OpenRouter's app-registration step fails with a 409 for it. Catch
+      // that here instead of sending the user into a confusing upstream error.
+      const hostname = window.location.hostname;
+      const isLoopback =
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '::1';
+      const isSecure = window.location.protocol === 'https:';
+      if (!isLoopback && !isSecure) {
+        await zrDialog({
+          icon: 'warning',
+          title: 'OpenRouter connect unavailable here',
+          text: "OpenRouter's account-connect flow only works over HTTPS or from localhost, and this page is loaded over plain HTTP at a non-localhost address. Create an API key directly at openrouter.ai/keys and paste it above instead.",
+        });
+        return;
+      }
+
+      setButtonLoading(button, true, 'Connecting...');
+
+      const verifierBytes = crypto.getRandomValues(new Uint8Array(64));
+      const verifier = base64UrlEncode(verifierBytes);
+
+      let challenge = verifier;
+      let method = 'plain';
+      // Plain HTTP self-hosted deployments may not expose crypto.subtle
+      // (it requires a secure context), so fall back to the PKCE "plain"
+      // method there instead of silently breaking the connect flow.
+      if (window.isSecureContext && window.crypto?.subtle) {
+        const digest = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(verifier)
+        );
+        challenge = base64UrlEncode(new Uint8Array(digest));
+        method = 'S256';
+      }
+
+      sessionStorage.setItem(
+        'openrouterOauth',
+        JSON.stringify({ verifier, method, target })
+      );
+
+      const callbackUrl = `${window.location.origin}/openrouter/callback`;
+      const authUrl =
+        'https://openrouter.ai/auth?callback_url=' +
+        encodeURIComponent(callbackUrl) +
+        '&code_challenge=' +
+        encodeURIComponent(challenge) +
+        '&code_challenge_method=' +
+        method;
+
+      const popup = window.open(
+        authUrl,
+        'openrouter-oauth',
+        'width=600,height=750'
+      );
+
+      if (!popup) {
+        setButtonLoading(button, false);
+        await zrDialog({
+          icon: 'error',
+          title: 'Popup blocked',
+          text: 'Allow popups for this page to connect your OpenRouter account.',
+        });
+        return;
+      }
+
+      setButtonLoading(button, false);
+    };
+
+    if (openRouterConnectBtn) {
+      openRouterConnectBtn.addEventListener('click', () =>
+        startOpenRouterConnect(openRouterConnectBtn, 'ocr')
+      );
+    }
+
+    if (openRouterAiConnectBtn) {
+      openRouterAiConnectBtn.addEventListener('click', () =>
+        startOpenRouterConnect(openRouterAiConnectBtn, 'ai')
+      );
+    }
   }
 
   toggleOcrFields();
@@ -2758,6 +3087,10 @@ function initializeFormHandlers() {
             formData.get('ocrApiUrl')
           ),
           apiKey: String(formData.get('ocrApiKey') || '').trim(),
+          zdr:
+            String(formData.get('ocrOpenRouterZdr') || 'no')
+              .trim()
+              .toLowerCase() === 'yes',
           setupOcrValidationTimeoutMs: getOcrValidationTimeoutMs(),
           ...getAnthropicFallbackForOcr(),
         };
@@ -3156,6 +3489,9 @@ function initializeRuntimeOverridePills() {
     { selector: '#customBaseUrl', envKey: 'CUSTOM_BASE_URL' },
     { selector: '#customApiKey', envKey: 'CUSTOM_API_KEY' },
     { selector: '#customModel', envKey: 'CUSTOM_MODEL' },
+    { selector: '#openrouterKey', envKey: 'OPENROUTER_API_KEY' },
+    { selector: '#openrouterModel', envKey: 'OPENROUTER_MODEL' },
+    { selector: '#openrouterZdr', envKey: 'OPENROUTER_ZDR' },
     { selector: '#azureEndpoint', envKey: 'AZURE_ENDPOINT' },
     { selector: '#azureApiKey', envKey: 'AZURE_API_KEY' },
     { selector: '#azureDeploymentName', envKey: 'AZURE_DEPLOYMENT_NAME' },
@@ -3270,6 +3606,7 @@ function initializeRuntimeOverridePills() {
     { selector: '#mistralApiKey', envKey: 'MISTRAL_API_KEY' },
     { selector: '#mistralOcrModel', envKey: 'MISTRAL_OCR_MODEL' },
     { selector: '#ocrPdfRenderEnabled', envKey: 'OCR_PDF_RENDER_ENABLED' },
+    { selector: '#ocrOpenRouterZdr', envKey: 'OCR_OPENROUTER_ZDR' },
     { selector: '#ocrPdfRenderMaxPages', envKey: 'OCR_PDF_RENDER_MAX_PAGES' },
     { selector: '#ocrPdfRenderDpi', envKey: 'OCR_PDF_RENDER_DPI' },
     {

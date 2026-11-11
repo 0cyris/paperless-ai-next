@@ -111,6 +111,61 @@ function claudeOcrInputError(message, code) {
   return error;
 }
 
+const MAX_ERROR_DETAIL_LENGTH = 500;
+
+/**
+ * Axios's own error.message for a failed vision-model request is just
+ * "Request failed with status code 400" — the actual reason (payload too
+ * large, unsupported image, a provider-specific rejection, etc.) lives in
+ * error.response.data, which this surfaces for logging. The original error
+ * is still thrown/returned unchanged by callers; this is log-only.
+ * @param {Error & {response?: {status?: number, data?: unknown}}} error
+ * @returns {string}
+ */
+function describeApiError(error) {
+  const status = error?.response?.status;
+  const data = error?.response?.data;
+  let bodyDetail = '';
+  if (data !== undefined && data !== null) {
+    const providerMessage = data?.error?.message || data?.message || null;
+    // OpenRouter wraps upstream-provider failures as
+    // { error: { message: "Provider returned error", metadata: { raw, provider_name } } } —
+    // the generic top-level message is nearly useless on its own, so surface
+    // metadata (where the actual upstream error text lives) alongside it.
+    const metadata = data?.error?.metadata;
+    let metadataDetail = '';
+    if (metadata) {
+      try {
+        metadataDetail =
+          typeof metadata === 'string' ? metadata : JSON.stringify(metadata);
+      } catch {
+        metadataDetail = String(metadata);
+      }
+    }
+
+    if (providerMessage && metadataDetail) {
+      bodyDetail = `${providerMessage} (${metadataDetail})`;
+    } else if (providerMessage) {
+      bodyDetail = String(providerMessage);
+    } else {
+      try {
+        bodyDetail = JSON.stringify(data);
+      } catch {
+        bodyDetail = String(data);
+      }
+    }
+  }
+  bodyDetail = bodyDetail.slice(0, MAX_ERROR_DETAIL_LENGTH);
+
+  const message = String(error?.message || 'Unknown error');
+  if (status) {
+    return bodyDetail
+      ? `HTTP ${status}: ${bodyDetail}`
+      : `HTTP ${status}: ${message}`;
+  }
+  return message;
+}
+
 class MistralOcrService {
   constructor() {
     this.activeDocumentIds = new Set();
@@ -166,6 +221,9 @@ class MistralOcrService {
     const normalizedProvider = String(config.mistralOcr?.provider || 'mistral')
       .trim()
       .toLowerCase();
+    if (normalizedProvider === 'openrouter') {
+      return 'openrouter';
+    }
     if (normalizedProvider === 'anthropic') {
       return 'anthropic';
     }
@@ -177,6 +235,7 @@ class MistralOcrService {
   /** The provider's name in progress messages and errors. */
   get providerLabel() {
     if (this.provider === 'ollama') return 'Local OCR';
+    if (this.provider === 'openrouter') return 'OpenRouter OCR';
     if (this.provider === 'anthropic') return 'Claude OCR';
     return 'Mistral OCR';
   }
@@ -217,9 +276,19 @@ class MistralOcrService {
       );
     }
 
+    if (this.provider === 'openrouter') {
+      return String(
+        config.mistralOcr?.apiUrl || 'https://openrouter.ai/api/v1'
+      ).replace(/\/+$/, '');
+    }
+
     return String(
       config.mistralOcr?.apiUrl || 'https://api.mistral.ai/v1'
     ).replace(/\/+$/, '');
+  }
+
+  get openRouterZdr() {
+    return config.mistralOcr?.openRouterZdr === 'yes';
   }
 
   isEnabled() {
@@ -332,7 +401,7 @@ class MistralOcrService {
     documentId = null,
     opts = {}
   ) {
-    if (this.provider === 'ollama') {
+    if (this.provider === 'ollama' || this.provider === 'openrouter') {
       return this.performOcrWithOllama(base64, mimeType, documentId, opts);
     }
 
@@ -734,6 +803,10 @@ class MistralOcrService {
             {
               maxPages: this.pdfRenderMaxPages,
               dpi: this.pdfRenderDpi,
+              // Reuse the user-facing OCR timeout setting rather than a
+              // second, invisible one — a large/slow PDF render should
+              // respect the same allowance the user already configured.
+              timeoutMs: this.ocrTimeoutMs,
             }
           );
         } catch (renderError) {
@@ -806,7 +879,7 @@ class MistralOcrService {
         // Skip the page without inserting placeholder text: the joined result
         // is written back to Paperless as document content.
         console.warn(
-          `[OCR] Page ${index + 1}/${pages.length} failed for document ${documentId}: ${error.message} — skipping page`
+          `[OCR] Page ${index + 1}/${pages.length} failed for document ${documentId}: ${describeApiError(error)} — skipping page`
         );
         lastError = error;
       }
@@ -847,6 +920,83 @@ class MistralOcrService {
   }
 
   /**
+   * OCR a single image via OpenRouter's OpenAI-compatible chat completions
+   * endpoint. Unlike the local-vision path there is no endpoint
+   * autodetection or Ollama-native fallback — OpenRouter only exposes an
+   * OpenAI-compatible API at a fixed base URL.
+   * @param {string} imageBase64
+   * @param {string} imageMimeType
+   * @returns {Promise<string>}
+   */
+  async _performOcrWithOpenRouter(imageBase64, imageMimeType) {
+    if (!this.apiKey) {
+      throw new Error('OCR_API_KEY is not configured for OpenRouter');
+    }
+
+    const imageDataUrl = `data:${imageMimeType};base64,${imageBase64}`;
+    const body = {
+      model: this.model,
+      temperature: 0,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Perform OCR on this image. Return only the extracted text in plain text. Do not add explanations.',
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageDataUrl,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    if (this.openRouterZdr) {
+      body.provider = { zdr: true };
+    }
+
+    let response;
+    try {
+      response = await axios.post(`${this.apiBase}/chat/completions`, body, {
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: this.ocrTimeoutMs,
+      });
+    } catch (error) {
+      if (isTimeoutError(error)) {
+        const timeoutMessage = buildTimeoutErrorMessage(
+          'OCR',
+          this.ocrTimeoutMs
+        );
+        console.error(
+          `[TIMEOUT][OCR] OpenRouter OCR request timed out: ${error.message}`
+        );
+        throw new Error(timeoutMessage, { cause: error });
+      }
+      throw error;
+    }
+
+    const ocrText = String(
+      response.data?.choices?.[0]?.message?.content || ''
+    ).trim();
+
+    if (!ocrText) {
+      throw new Error(
+        `OpenRouter OCR returned empty output for ${imageMimeType}`
+      );
+    }
+
+    return ocrText;
+  }
+
+  /**
    * Rejects a vision response that stopped at the token limit.
    *
    * Both local endpoints report this the same way: OpenAI-compatible servers
@@ -877,6 +1027,10 @@ class MistralOcrService {
    * @returns {Promise<string>}
    */
   async _performLocalOcrOnImage(imageBase64, imageMimeType) {
+    if (this.provider === 'openrouter') {
+      return this._performOcrWithOpenRouter(imageBase64, imageMimeType);
+    }
+
     const normalizedApiBase = await this.resolveLocalOcrApiBase();
     const baseApiUrl = normalizedApiBase.replace(/\/v1$/i, '');
     const openAiApiUrl = /\/v1$/i.test(normalizedApiBase)

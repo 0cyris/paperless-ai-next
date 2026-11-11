@@ -511,6 +511,16 @@ const custom = liveBlock({
   model: () => env('CUSTOM_MODEL'),
 });
 
+const openRouter = liveBlock({
+  apiUrl: () =>
+    env('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1').trim(),
+  apiKey: () => env('OPENROUTER_API_KEY'),
+  model: () => env('OPENROUTER_MODEL'),
+  // Restrict chat routing and model discovery to Zero-Data-Retention
+  // endpoints (AI analysis path; the OCR path has its own switch).
+  zdr: () => envBool('OPENROUTER_ZDR', 'no'),
+});
+
 const azure = liveBlock({
   apiKey: () => env('AZURE_API_KEY'),
   endpoint: () => env('AZURE_ENDPOINT'),
@@ -559,6 +569,9 @@ const mistralOcr = liveBlock({
   pdfRenderEnabled: () => envBool('OCR_PDF_RENDER_ENABLED', 'yes'),
   pdfRenderMaxPages: () => envInt('OCR_PDF_RENDER_MAX_PAGES', '10'),
   pdfRenderDpi: () => envInt('OCR_PDF_RENDER_DPI', '150'),
+  // OpenRouter-only: restrict chat routing and model discovery to
+  // Zero-Data-Retention endpoints.
+  openRouterZdr: () => envBool('OCR_OPENROUTER_ZDR', 'no'),
   // Automatic draining of the OCR queue. Without it the queue is only
   // emptied by hand via "Process All Pending" on the /ocr page.
   autoProcessEnabled: () => envBool('OCR_AUTO_PROCESS_ENABLED', 'no'),
@@ -782,6 +795,7 @@ defineLive(module.exports, {
   openai: () => openai,
   ollama: () => ollama,
   custom: () => custom,
+  openRouter: () => openRouter,
   azure: () => azure,
   anthropic: () => anthropic,
   mistralOcr: () => mistralOcr,

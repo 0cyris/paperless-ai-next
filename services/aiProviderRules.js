@@ -26,7 +26,7 @@
 /* ------------------------------------------------------------------ */
 
 /**
- * @typedef {'openai'|'azure'|'custom'|'ollama'|'anthropic'} ProviderId
+ * @typedef {'openai'|'azure'|'custom'|'openrouter'|'ollama'|'anthropic'} ProviderId
  * @typedef {'openai-compatible'|'ollama'|'anthropic'} Transport
  */
 
@@ -64,6 +64,16 @@ const PROVIDERS = Object.freeze([
       'CUSTOM_BASE_URL',
       'CUSTOM_API_KEY',
       'CUSTOM_MODEL',
+    ]),
+  }),
+  Object.freeze({
+    id: 'openrouter',
+    label: 'OpenRouter',
+    transport: 'openai-compatible',
+    connection: Object.freeze([
+      'OPENROUTER_API_KEY',
+      'OPENROUTER_ZDR',
+      'OPENROUTER_MODEL',
     ]),
   }),
   Object.freeze({
@@ -176,13 +186,13 @@ const MODEL_FAMILIES = Object.freeze([
   {
     transport: 'openai-compatible',
     pattern: GPT_OSS_MODEL_PATTERN,
-    providers: ['custom'],
+    providers: ['custom', 'openrouter'],
     rules: { reasoningEffort: 'compatible', reasoningOffEffort: 'low' },
   },
   {
     transport: 'openai-compatible',
     pattern: QWEN_MODEL_PATTERN,
-    providers: ['custom'],
+    providers: ['custom', 'openrouter'],
     rules: {
       thinkingSwitch: 'chat_template',
       thinkingPromptSwitch: '/no_think',
@@ -205,6 +215,7 @@ const MODEL_FAMILIES = Object.freeze([
 const PROVIDER_DEFAULTS = Object.freeze({
   openai: Object.freeze({ defaultCompletionCap: false }),
   custom: Object.freeze({ thinkingSwitch: 'chat_template' }),
+  openrouter: Object.freeze({ thinkingSwitch: 'chat_template' }),
 });
 
 /** @type {Readonly<Record<Transport, RequestRules>>} */
@@ -276,7 +287,7 @@ function resolveRules(provider, model = '') {
   // gateways that each read the OpenAI dialect a little differently. The
   // compatible dialect is what all of them understand: reasoning_effort
   // 'low' rather than 'minimal', and the cap as max_tokens.
-  if (id === 'custom') {
+  if (id === 'custom' || id === 'openrouter') {
     if (rules.reasoningEffort === 'openai') {
       rules.reasoningEffort = 'compatible';
     }
@@ -323,7 +334,7 @@ const AI_OPTIONS = Object.freeze([
     label: 'Answer length',
     help: 'How long an answer the model may write for one document, in tokens (roughly three quarters of a word each). The default is enough for tags, a title and a few fields; raise it only when answers arrive cut off.',
     level: 'advanced',
-    providers: ['openai', 'azure', 'custom', 'ollama'],
+    providers: ['openai', 'azure', 'custom', 'openrouter', 'ollama'],
     defaultValue: '1000',
     section: 'provider',
   },
@@ -341,7 +352,7 @@ const AI_OPTIONS = Object.freeze([
     label: 'Analysis creativity',
     help: 'How freely the model may deviate from the most likely answer when it tags and titles a document, from 0 (always the same answer) to 2 (very varied). Low values give consistent tags; leave it unless tags come out erratic.',
     level: 'advanced',
-    providers: ['openai', 'azure', 'custom', 'ollama'],
+    providers: ['openai', 'azure', 'custom', 'openrouter', 'ollama'],
     defaultValue: '0.3',
     section: 'provider',
   },
@@ -350,7 +361,7 @@ const AI_OPTIONS = Object.freeze([
     label: 'Generation creativity',
     help: 'The same setting for the free-text tasks — the playground, the duplicate review and tag simplification. A little higher than for analysis, because those answers may be worded freely.',
     level: 'advanced',
-    providers: ['openai', 'azure', 'custom', 'ollama'],
+    providers: ['openai', 'azure', 'custom', 'openrouter', 'ollama'],
     defaultValue: '0.7',
     section: 'provider',
   },
